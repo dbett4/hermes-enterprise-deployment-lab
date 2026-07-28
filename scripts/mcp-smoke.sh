@@ -57,8 +57,9 @@ resolve_fastmcp() {
 PYTHON_BIN="$(resolve_python)"
 resolve_fastmcp
 HERMES_BIN="${HERMES_BIN:-$(command -v hermes || true)}"
-MCP_LAUNCHER="${ROOT_DIR}/scripts/run-enterprise-mcp.sh"
-SERVER_SPEC="${ROOT_DIR}/enterprise-mcp/enterprise_mcp/server.py:mcp"
+# FastMCP shell-splits --command; use repo-relative paths so spaced ROOT_DIR works.
+MCP_LAUNCHER="./scripts/run-enterprise-mcp.sh"
+SERVER_SPEC="enterprise-mcp/enterprise_mcp/server.py:mcp"
 RECEIPT_DIR="${RECEIPT_DIR:-${ROOT_DIR}/.mcp-receipts}"
 RECEIPT_PATH="${RECEIPT_PATH:-${RECEIPT_DIR}/mcp-smoke-receipt.json}"
 INCIDENT_ID="${DEFAULT_INCIDENT_ID:-INC-2026-0042}"
