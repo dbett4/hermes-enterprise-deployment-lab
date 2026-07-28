@@ -1,0 +1,94 @@
+# Hermes Enterprise Deployment Lab — Build Spec
+
+## Purpose
+
+Create truthful public proof that Dave can deploy, integrate, debug, and operate Hermes Agent in a customer-shaped environment. This is a portfolio system, not a tutorial screenshot and not a clone of private client infrastructure.
+
+## Target role coverage
+
+| Nous responsibility | Lab proof |
+|---|---|
+| Cloud, on-prem, hybrid deployment | Local Compose profile plus a cloud-shaped deployment profile using the same contracts |
+| Internal APIs/data systems/tooling | Mock enterprise operations API and a Hermes plugin/MCP integration |
+| Authentication systems | Signed-service-token boundary with secrets kept out of source |
+| Infrastructure/orchestration/model debugging | Failure fixtures, structured logs, trace IDs, health checks, and a troubleshooting runbook |
+| Customer scoping and iteration | One customer scenario, explicit requirements, assumptions, acceptance tests, and change log |
+| Reliability and observability | Readiness/liveness checks, retry budgets, timeouts, metrics/events, and alert examples |
+| Reusable deployment patterns | Parameterized configuration, environment profiles, scripts, and documented extension points |
+| Architecture and implementation documentation | Architecture diagram, ADRs, operator runbook, and demo walkthrough |
+
+## Scenario
+
+A fictional regulated-services company wants Hermes to coordinate an incident-intake workflow:
+
+1. An internal service exposes incidents, accounts, and runbook metadata through an authenticated API.
+2. Hermes receives a request from a messaging or CLI surface.
+3. A custom integration retrieves only the permitted records.
+4. The agent classifies the incident, gathers runbook context, and creates a local proposed action plan.
+5. Consequential actions remain approval-gated; the lab never mutates an external production system.
+6. Every run emits a correlation ID, step events, result status, latency, and an inspectable receipt.
+
+## Milestones
+
+### M1 — Green local deployment
+
+- Compose starts all required services.
+- Health checks become green without manual intervention.
+- A smoke command calls the enterprise API through the Hermes integration.
+- CI runs unit, contract, and Compose smoke tests.
+- README gets a five-minute quickstart with expected real output.
+
+### M2 — Integration and identity boundary
+
+- API uses scoped authentication.
+- Connector handles auth failure, pagination, timeout, malformed response, and upstream 5xx.
+- No secrets appear in repository, logs, or receipts.
+- Contract tests prove least-privilege record access.
+
+### M3 — Agent workflow
+
+- Hermes loads the plugin/MCP and one bounded skill.
+- One end-to-end incident workflow produces a structured local receipt.
+- Human approval is required before any simulated consequential action.
+- A failed dependency yields a useful recovery path rather than a generic error.
+
+### M4 — Observability and failure injection
+
+- Correlation IDs span gateway/request, integration call, agent operation, and receipt.
+- Metrics include run count, success/failure, latency, retry count, and dependency status.
+- Failure scripts cover API timeout, bad token, unavailable telemetry, and agent/provider error.
+- Troubleshooting guide maps symptoms to evidence and recovery steps.
+
+### M5 — Cloud/hybrid shape
+
+- Add a second Compose overlay or low-cost cloud deployment path only after M1–M4 are green.
+- Document network boundaries, secret injection, persistent state, backup/recovery, and upgrade strategy.
+- Kubernetes is optional; add it only if the deployment is tested in CI and explainable end to end.
+
+### M6 — Portfolio packaging
+
+- Record a concise demo.
+- Publish architecture diagram and two ADRs.
+- Add an honest tradeoffs and limitations section.
+
+## Quality gates
+
+- No client names, data, screenshots, formulas, IDs, URLs, credentials, or proprietary LSL/Workiva source.
+- No copied private repository history.
+- No claim that the lab is a production customer deployment.
+- Every advertised command is exercised in CI or a checked local smoke.
+- Every documented failure mode has a committed fixture or test.
+- Docker images and dependencies are pinned or bounded intentionally.
+- A reviewer can understand the security boundary and recovery behavior without reading all source files.
+
+## Definition of done
+
+A fresh clone can start the stack, pass health and contract checks, execute the incident workflow, display correlated operational evidence, survive at least three injected failures with documented recovery, pass CI, and support a five-minute technical walkthrough without private context.
+
+## Explicit non-goals
+
+- Generic chatbot UI
+- Model training or fine-tuning
+- Autonomous incident remediation
+- Keyword-only Kubernetes manifests
+- Real client/CRM/identity/data-warehouse integrations in the public version
