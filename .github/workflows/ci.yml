@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt -r workflow-runner/requirements.txt
+
+      - name: Run unit and contract tests
+        run: python3 -m pytest -q
+
+      - name: Validate Compose file
+        run: podman compose config
+
+      - name: Build and smoke test stack
+        run: |
+          cp .env.example .env
+          podman compose up -d --build --wait
+          ./scripts/smoke.sh
+          podman compose down -v

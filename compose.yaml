@@ -1,0 +1,39 @@
+services:
+  enterprise-api:
+    build:
+      context: ./enterprise-api
+    image: hermes-lab/enterprise-api:0.1.0
+    ports:
+      - "8080:8080"
+    environment:
+      ENTERPRISE_API_TOKEN: ${ENTERPRISE_API_TOKEN:-lab-read-token}
+      INJECT_TIMEOUT_SECONDS: "2"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.50"
+
+  workflow-runner:
+    build:
+      context: ./workflow-runner
+    image: hermes-lab/workflow-runner:0.1.0
+    depends_on:
+      enterprise-api:
+        condition: service_healthy
+    environment:
+      ENTERPRISE_API_URL: http://enterprise-api:8080
+      ENTERPRISE_API_TOKEN: ${ENTERPRISE_API_TOKEN:-lab-read-token}
+      DEFAULT_INCIDENT_ID: ${DEFAULT_INCIDENT_ID:-INC-2026-0042}
+      WORKFLOW_RECEIPT_PATH: /tmp/workflow-receipt.json
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
