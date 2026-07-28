@@ -1,0 +1,27 @@
+# Hermes MCP example configuration (placeholder paths)
+#
+# Generate a copy with absolute paths for your clone:
+#   ./scripts/emit-hermes-mcp-config.sh > /tmp/hermes-enterprise-mcp.yaml
+#
+# Then merge into an isolated HERMES_HOME config (never ~/.hermes/config.yaml):
+#   export HERMES_HOME=/tmp/hermes-mcp-lab
+#   export ENTERPRISE_API_TOKEN=lab-read-token
+#   mkdir -p "$HERMES_HOME"
+#   ./scripts/emit-hermes-mcp-config.sh >> "$HERMES_HOME/config.yaml"
+
+mcp_servers:
+  enterprise_ops:
+    command: "<REPO_ROOT>/scripts/run-enterprise-mcp.sh"
+    args: []
+    env:
+      ENTERPRISE_API_URL: "http://127.0.0.1:8080"
+      ENTERPRISE_API_TOKEN: "${ENTERPRISE_API_TOKEN}"
+      ENTERPRISE_API_TIMEOUT_SECONDS: "10"
+      PYTHONPATH: "<REPO_ROOT>/enterprise-mcp:<REPO_ROOT>/workflow-runner"
+    tools:
+      include:
+        - check_enterprise_api
+        - get_incident_context
+        - propose_incident_plan
+    sampling:
+      enabled: false

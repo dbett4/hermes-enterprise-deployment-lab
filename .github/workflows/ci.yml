@@ -15,18 +15,26 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install test dependencies
-        run: pip install -r requirements-dev.txt -r workflow-runner/requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt -r workflow-runner/requirements.txt -r enterprise-mcp/requirements.txt
 
-      - name: Run unit and contract tests
+      - name: Run unit, contract, and MCP tests
         run: python3 -m pytest -q
+
+      - name: FastMCP inspect MCP server
+        run: |
+          export PYTHONPATH="${PWD}/enterprise-mcp:${PWD}/workflow-runner"
+          fastmcp inspect enterprise-mcp/enterprise_mcp/server.py:mcp
 
       - name: Validate Compose file
         run: podman compose config
 
-      - name: Build and smoke test stack
+      - name: Build and smoke test stack (protocol proof)
         run: |
           cp .env.example .env
           podman compose up -d --build --wait
           ./scripts/smoke.sh
+          export PYTHONPATH="${PWD}/enterprise-mcp:${PWD}/workflow-runner"
+          export MCP_SMOKE_PROTOCOL_ONLY=1
+          ./scripts/mcp-smoke.sh
           podman compose down -v

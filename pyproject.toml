@@ -5,6 +5,7 @@ description = "Customer-shaped Hermes enterprise deployment lab"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
-testpaths = ["enterprise-api/tests", "workflow-runner/tests"]
-pythonpath = ["enterprise-api", "workflow-runner"]
+testpaths = ["enterprise-api/tests", "workflow-runner/tests", "enterprise-mcp/tests"]
+pythonpath = ["enterprise-api", "workflow-runner", "enterprise-mcp"]
 addopts = "-q"
+asyncio_mode = "auto"

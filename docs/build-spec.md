@@ -47,10 +47,13 @@ A fictional regulated-services company wants Hermes to coordinate an incident-in
 
 ### M3 — Agent workflow
 
-- Hermes loads the plugin/MCP and one bounded skill.
+- Hermes loads the MCP server via isolated `HERMES_HOME` and discovers three prefixed tools.
+- FastMCP protocol smoke invokes all three tools deterministically.
 - One end-to-end incident workflow produces a structured local receipt.
-- Human approval is required before any simulated consequential action.
+- Human approval is **represented** in receipts for consequential steps; no runtime approval gate or mutation execution.
 - A failed dependency yields a useful recovery path rather than a generic error.
+
+Status: **Partial/Yellow** until local Hermes discovery proof passes alongside protocol proof. CI covers protocol + Compose only.
 
 ### M4 — Observability and failure injection
 

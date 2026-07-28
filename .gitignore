@@ -12,5 +12,6 @@ build/
 venv/
 receipts/
 .smoke-receipts/
+.mcp-receipts/
 *.log
 .DS_Store
