@@ -11,7 +11,7 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="$(command -v python3)"
 fi
 
-HERMES_BIN="${HERMES_BIN:-$(command -v hermes)}"
+HERMES_BIN="${HERMES_BIN:-$(command -v hermes || true)}"
 if [[ -z "$HERMES_BIN" || ! -x "$HERMES_BIN" ]]; then
   echo "ERROR: hermes CLI not found in PATH" >&2
   exit 1

@@ -29,31 +29,33 @@ resolve_python() {
   exit 1
 }
 
+FASTMCP_CMD=()
+
 resolve_fastmcp() {
   if [[ -n "${FASTMCP_BIN:-}" && -x "${FASTMCP_BIN}" ]]; then
-    echo "$FASTMCP_BIN"
+    FASTMCP_CMD=("$FASTMCP_BIN")
     return
   fi
   local py
   py="$(resolve_python)"
   if [[ -x "${ROOT_DIR}/.venv/bin/fastmcp" ]]; then
-    echo "${ROOT_DIR}/.venv/bin/fastmcp"
+    FASTMCP_CMD=("${ROOT_DIR}/.venv/bin/fastmcp")
     return
   fi
   if command -v fastmcp >/dev/null 2>&1; then
-    command -v fastmcp
+    FASTMCP_CMD=("$(command -v fastmcp)")
     return
   fi
   if "$py" -m fastmcp --help >/dev/null 2>&1; then
-    echo "$py -m fastmcp"
+    FASTMCP_CMD=("$py" -m fastmcp)
     return
   fi
-  echo "ERROR: fastmcp not found (pip install -r requirements-dev.txt or set FASTMCP_BIN)" >&2
+  echo "ERROR: fastmcp not found (pip install -r requirements-dev.txt or set FASTMCP_BIN to an executable path)" >&2
   exit 1
 }
 
 PYTHON_BIN="$(resolve_python)"
-FASTMCP_BIN="$(resolve_fastmcp)"
+resolve_fastmcp
 HERMES_BIN="${HERMES_BIN:-$(command -v hermes || true)}"
 MCP_LAUNCHER="${ROOT_DIR}/scripts/run-enterprise-mcp.sh"
 SERVER_SPEC="${ROOT_DIR}/enterprise-mcp/enterprise_mcp/server.py:mcp"
@@ -72,22 +74,22 @@ curl -fsS "${ENTERPRISE_API_URL}/healthz" >/dev/null
 curl -fsS "${ENTERPRISE_API_URL}/readyz" >/dev/null
 
 echo "==> FastMCP inspect"
-$FASTMCP_BIN inspect "$SERVER_SPEC"
+"${FASTMCP_CMD[@]}" inspect "$SERVER_SPEC"
 
 echo "==> FastMCP list tools"
-TOOL_LIST_JSON="$($FASTMCP_BIN list --command "$MCP_LAUNCHER" --json)"
+TOOL_LIST_JSON="$("${FASTMCP_CMD[@]}" list --command "$MCP_LAUNCHER" --json)"
 echo "$TOOL_LIST_JSON"
 
 echo "==> FastMCP call check_enterprise_api"
-CHECK_JSON="$($FASTMCP_BIN call --command "$MCP_LAUNCHER" --target check_enterprise_api --json)"
+CHECK_JSON="$("${FASTMCP_CMD[@]}" call --command "$MCP_LAUNCHER" --target check_enterprise_api --json)"
 echo "$CHECK_JSON"
 
 echo "==> FastMCP call get_incident_context"
-CONTEXT_JSON="$($FASTMCP_BIN call --command "$MCP_LAUNCHER" --target get_incident_context --input-json "{\"incident_id\":\"$INCIDENT_ID\"}" --json)"
+CONTEXT_JSON="$("${FASTMCP_CMD[@]}" call --command "$MCP_LAUNCHER" --target get_incident_context --input-json "{\"incident_id\":\"$INCIDENT_ID\"}" --json)"
 echo "$CONTEXT_JSON"
 
 echo "==> FastMCP call propose_incident_plan"
-PLAN_JSON="$($FASTMCP_BIN call --command "$MCP_LAUNCHER" --target propose_incident_plan --input-json "{\"incident_id\":\"$INCIDENT_ID\"}" --json)"
+PLAN_JSON="$("${FASTMCP_CMD[@]}" call --command "$MCP_LAUNCHER" --target propose_incident_plan --input-json "{\"incident_id\":\"$INCIDENT_ID\"}" --json)"
 echo "$PLAN_JSON"
 
 "$PYTHON_BIN" - <<'PY' "$CHECK_JSON" "$CONTEXT_JSON" "$PLAN_JSON"

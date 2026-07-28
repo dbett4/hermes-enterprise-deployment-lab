@@ -1,8 +1,8 @@
 # Hermes Enterprise Deployment Lab
 
-A customer-shaped local integration lab with a real FastMCP stdio surface that Hermes Agent can discover and invoke, explicit approval metadata in plan receipts, failure receipts, and reproducible Podman-based operation.
+A customer-shaped local integration lab with a real FastMCP stdio surface that Hermes Agent can discover; tool invocation is proven at the FastMCP protocol level. Includes explicit approval metadata in plan receipts, failure receipts, and reproducible Podman-based operation.
 
-> Status: **M3 Partial (Yellow)** — FastMCP protocol proof is green in CI; full M3 requires local Hermes CLI discovery proof. Not production Hermes Enterprise deployment, cloud/hybrid scale, OIDC, Kubernetes, or production ML engineering.
+> Status: **M3 Partial (Yellow)** — local FastMCP protocol proof is green; GitHub Actions CI is configured (pending first run); full M3 requires local Hermes CLI discovery proof. Not production Hermes Enterprise deployment, cloud/hybrid scale, OIDC, Kubernetes, or production ML engineering.
 
 ## What this proves
 
@@ -129,7 +129,7 @@ ENTERPRISE_API_TOKEN=lab-read-token
 | Milestone | Status |
 |---|---|
 | M1 Green local deployment | Green |
-| M2 Identity/integration boundary | Green |
+| M2 Identity/integration boundary | **Partial/Yellow** — static bearer auth only; no connector pagination/retry per build-spec |
 | M3 Agent workflow (MCP + Hermes discovery) | **Partial/Yellow** — protocol green; Hermes discovery local |
 | M4 Observability + failure scripts | Planned |
 
