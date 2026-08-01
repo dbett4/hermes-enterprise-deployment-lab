@@ -92,8 +92,10 @@ Hermes / script ──stdio──► enterprise-mcp ──Bearer+Idempotency-Key
 
 ## Fresh-clone setup
 
-Prerequisites: **Python 3.11+**. Podman and the Hermes CLI are optional and only
-needed for the container and Hermes proofs.
+Prerequisites: **Python 3.11, 3.12, or 3.13**. Not 3.14 — `pydantic-core` has no
+wheel for it and its vendored PyO3 tops out at 3.13, so a source build fails.
+Podman and the Hermes CLI are optional and only needed for the container and
+Hermes proofs.
 
 ```bash
 git clone <repo-url> hermes-enterprise-deployment-lab

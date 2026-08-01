@@ -2,7 +2,9 @@
 name = "hermes-enterprise-deployment-lab"
 version = "0.1.0"
 description = "Customer-shaped Hermes enterprise deployment lab"
-requires-python = ">=3.11"
+# Upper bound is real, not defensive: pydantic-core 2.x does not build on 3.14
+# (its vendored PyO3 supports 3.13 at most), and there is no prebuilt wheel.
+requires-python = ">=3.11,<3.14"
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "enterprise-api/tests", "workflow-runner/tests", "enterprise-mcp/tests"]
