@@ -1,4 +1,8 @@
-"""Approval-gated, idempotent execution of a single runbook action.
+"""Two-phase-guarded, idempotent execution of a single runbook action.
+
+The guard is not a human-in-the-loop control: the token minted below is returned
+to the same caller that was just refused. What it enforces is that a single call
+can never mutate. See `workflow_runner/approvals.py` for the full limitation.
 
 Control flow, in one place so it is auditable:
 
@@ -32,8 +36,12 @@ STATUS_ERROR = "error"
 
 APPLY_LIMITATIONS = [
     "The mutation target is a fixture action store inside the lab API, not a real system.",
-    "Approval is enforced in this workflow layer; it is not a Hermes-side policy control.",
+    "The two-phase guard is enforced in this workflow layer; it is not a Hermes-side policy control.",
+    "The approval token is returned to the caller that was refused, so a caller can self-approve. "
+    "This is not a human-in-the-loop control and no approver identity is recorded.",
     "A resume reuses the approval's idempotency key, so the API returns the original record.",
+    "Deduplication is keyed on the idempotency key, which is minted per approval: two approvals "
+    "for the same action_id produce two records.",
 ]
 
 
@@ -132,7 +140,7 @@ def apply_incident_action(
             incident_id=incident_id,
             action_id=action_id,
             idempotency_key=approval.idempotency_key,
-            outcome="blocked_pending_human_approval",
+            outcome="blocked_pending_approval_token",
         )
         return finish(
             {
@@ -145,8 +153,10 @@ def apply_incident_action(
                 "approval_token": approval.approval_token,
                 "idempotency_key": approval.idempotency_key,
                 "next_step": (
-                    "A human must review this action and re-invoke the tool with "
-                    "approval_token to execute it. No change has been made."
+                    "No change has been made. To execute, re-invoke this tool with "
+                    "the approval_token above. This is a two-phase guard, not a "
+                    "human-in-the-loop control: nothing here verifies that a "
+                    "second party supplied the token."
                 ),
             }
         )

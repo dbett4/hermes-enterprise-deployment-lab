@@ -116,6 +116,8 @@ payload = {
         "Hermes CLI `mcp test` proves server connection and tool listing only.",
         "Tool invocation is proven separately at the FastMCP protocol layer.",
         "No LLM/provider call is made in this proof; no model chose any tool.",
+        "No model ever will: provider spend was declined on 2026-08-01. What this "
+        "repository proves about Hermes is discovery and enumeration, permanently.",
     ],
 }
 with open(receipt_path, "w") as fh:

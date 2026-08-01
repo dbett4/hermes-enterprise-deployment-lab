@@ -11,7 +11,9 @@
 # can actually settle.
 #
 # Still NOT proven here: that Hermes enforces its own include list against a
-# model. That needs a model-driven run.
+# model. That would need a model-driven run, which will not happen — provider
+# spend was declined on 2026-08-01. Hermes's role in this repository is
+# discovery and enumeration, permanently.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -111,7 +113,9 @@ payload = {
     ],
     "does_not_prove": [
         "That Hermes enforces its own tools.include list against a model.",
-        "Any model-driven tool invocation.",
+        "Any model-driven tool invocation. No model has ever invoked these tools "
+        "and none will: provider spend was declined on 2026-08-01. Hermes's role "
+        "here is discovery and enumeration only.",
     ],
 }
 with open(receipt_path, "w") as fh:

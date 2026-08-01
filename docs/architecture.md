@@ -34,12 +34,12 @@ flowchart LR
 
 | Layer | Command | What it proves | What it does not |
 |---|---|---|---|
-| Full arc | `./scripts/demo.sh` | Scoped discovery, approval stop, forced failure, resume, exactly-once, audit | No model is involved; the caller is the script |
+| Full arc | `./scripts/demo.sh` | Scoped discovery, two-phase mutation guard, forced failure, resume, exactly-once, audit | No model is involved; the caller is the script, and it self-approves |
 | FastMCP protocol | `./scripts/mcp-smoke.sh` | Tool list/inspect/call **with real credential injection**, plus a wrong-token negative control | Not a Hermes-side proof |
 | Hermes discovery | `./scripts/hermes-mcp-proof.sh` | The real `hermes` CLI connects over stdio and lists the tools | No invocation, no LLM |
 | Hermes scoping | `./scripts/hermes-tool-filter-proof.sh` | Hermes discovers 4 tools vs 1 depending on the server allowlist | Not Hermes's own `tools.include` enforcement |
-| Workflow seam | `./scripts/smoke.sh` | Containerized workflow-runner produces an approval-gated receipt | Read/plan path only |
-| Fresh clone | `./scripts/fresh-clone-check.sh` | A clean clone of HEAD installs and passes everything | Not a CI run |
+| Workflow seam | `./scripts/smoke.sh` | Containerized workflow-runner produces a guarded receipt | Read/plan path only |
+| Fresh clone | `./scripts/fresh-clone-check.sh` | A clean clone of HEAD installs, passes `pytest`, and passes `scripts/demo.sh` | Not a CI run; it does **not** re-run the Hermes, smoke, or container proofs |
 
 ## MCP tool surface
 
@@ -48,7 +48,7 @@ flowchart LR
 | `check_enterprise_api` | no | Health/readiness probe; reports whether a write credential is present; never returns a token |
 | `get_incident_context` | no | Incident + runbook retrieval with per-dependency correlation IDs |
 | `propose_incident_plan` | no | Plan receipt; consequential steps carry `approval_required` and a stable `action_id` |
-| `apply_incident_plan` | **yes** | Approval-gated idempotent execution of one runbook step |
+| `apply_incident_plan` | **yes** | Two-phase-guarded, idempotent execution of one runbook step |
 
 The surface is chosen by `ENTERPRISE_MCP_ENABLED_TOOLS` and applied **before**
 registration, so an excluded tool is absent from `list_tools` and not callable.
@@ -82,7 +82,7 @@ Two static bearer scopes:
 Missing credentials return `401`, wrong scope returns `403`. The MCP server has
 **no default token** and exits 2 without one.
 
-## Approval semantics
+## Two-phase mutation guard (not human approval)
 
 Enforced at runtime, not merely represented in a receipt.
 
@@ -93,11 +93,51 @@ apply_incident_plan(incident, other_action, token)   -> approval_rejected, NO wr
 apply_incident_plan(incident, action, valid_token)   -> write dispatched
 ```
 
-The human step is supplying the token out of band. Tests assert "no write was
-sent" against observed HTTP traffic rather than the response's own claim.
+**What is enforced:** a single call can never mutate. A mutation always requires a
+second call carrying a token that a prior refusal minted, bound to that exact
+`(incident_id, action_id)`. Tests assert "no write was sent" against observed HTTP
+traffic rather than the response's own claim.
+
+**What is not enforced: any human involvement.** The token is returned to the same
+caller that was just refused (`workflow_runner/executor.py`, the
+`pending_approval` payload). There is no out-of-band channel, no approver
+identity, no expiry, and no second-party check, so an autonomous caller can
+self-approve in its next call. `scripts/demo.sh` and every test in this
+repository do exactly that — they mint the token and replay it to themselves.
+Calling this "human-in-the-loop" would be false.
+
+Two further limits on the same mechanism:
+
+- The approval store is an unauthenticated JSON file at `APPROVAL_STORE_PATH`.
+  Anything that can write it can plant a token `validate()` will accept.
+- `validate()` never reads `status`, so a token is neither consumed nor expired.
 
 Boundary: this is a workflow-layer control. It is not a Hermes policy control and
 not an API-side authorization rule.
+
+### Roadmap — what a real approval control would require
+
+**Status: deferred by the owner on 2026-08-01. Not implemented, not scheduled.**
+Recorded here so the gap is a known design decision rather than an oversight.
+
+Turning the guard above into a genuine human-in-the-loop control needs four
+changes, none of which exist today:
+
+1. **Mint the token to a store, not to the caller.** The refusal response returns
+   only an opaque `approval_id`. The token value never travels back to the caller
+   that was refused.
+2. **Grant it from a separate actor, out of band.** A distinct process or command
+   (for example `approve <approval_id> --actor <name>`) flips the request to
+   grantable and records who granted it. The granting identity is persisted with
+   the approval.
+3. **Bound it in time.** A TTL on the grant, checked at validation, plus
+   single-use consumption so an `applied` approval cannot authorize a new commit.
+4. **Validate against what was granted,** not merely against what was requested:
+   `validate()` refuses anything not explicitly granted, expired, already
+   consumed, or bound to a different action.
+
+Until all four exist, every description of this mechanism in this repository must
+say "two-phase guard", never "human approval".
 
 ## Idempotency and resume
 
@@ -137,5 +177,16 @@ are configuration rather than a tool argument an agent could set.
 ## Limitations
 
 A customer-shaped lab, not a customer deployment. The approval and audit stores
-are local files sized for a single operator. No model has chosen or invoked any
-of these tools.
+are local files sized for a single operator.
+
+**No model has ever chosen or invoked any of these tools, and none will.** Every
+call in this repository comes from a script or a test. A model-driven run would
+require provider spend, which the owner declined on 2026-08-01. This is a
+permanent ceiling on what the repository can demonstrate, not an open task. What
+a real Hermes build did do is discover and enumerate the tool surface over stdio
+(`scripts/hermes-mcp-proof.sh`, `scripts/hermes-tool-filter-proof.sh`).
+
+The audit log is append-only by convention — a plain `.jsonl` file with no
+signature or chain hash. It is not tamper-evident, `run_started` and
+`run_finished` carry a null correlation ID, and the enterprise API writes no
+audit of its own, so a direct write to the API leaves no trace in it.

@@ -1,4 +1,16 @@
-# Second-Operator Validation Protocol
+# Second-Operator Validation Protocol — UNRUN
+
+> **STATUS: NEVER EXECUTED. NO VALIDATOR IDENTIFIED. NOT SCHEDULED.**
+>
+> This document is an **unrun protocol** — instructions for a validation that has
+> not happened. It is **not** pending evidence, not a run in progress, and not a
+> partially-completed result. The tables below are blank because nobody has ever
+> filled them in, and no second operator is lined up to.
+>
+> Do not cite this file as validation of anything. It carries zero evidentiary
+> weight in its current state. It becomes evidence only when a person who is not
+> the author executes every step below on their own machine and fills in the
+> results section themselves.
 
 This lab has **not** been validated by a second operator. This document is the
 script for doing that; the results section below is intentionally blank and must
@@ -63,7 +75,7 @@ Check each of these in the printed transcript, and mark anything that differs:
 |---|---|---|
 | 1 | The read/plan allowlist does not expose `apply_incident_plan`, and calling it fails | STEP 1 |
 | 2 | The write-enabled allowlist exposes exactly four tools | STEP 2 |
-| 3 | Applying without an approval token returns `pending_approval` and the store count does not change | STEP 4 |
+| 3 | Applying without an approval token returns `pending_approval` and the store count does not change. The transcript should also state plainly that the demo replays that token to itself and no human is involved | STEP 4 |
 | 4 | The injected post-commit fault returns `upstream_5xx` with resume instructions | STEP 5 |
 | 5 | Resuming with the same token returns `replayed` | STEP 6 |
 | 6 | The store contains exactly **one** record at the end | STEP 7 |
@@ -111,9 +123,12 @@ Record anything that succeeded when it should not have.
 
 ---
 
-## Results
+## Results — NONE. THIS PROTOCOL HAS NEVER BEEN RUN.
 
-**Status: NOT YET RUN.** Nobody other than the author has executed this protocol.
+**Nobody other than the author has ever executed this protocol, and no second
+operator has been identified or scheduled.** The empty cells below are not
+awaiting a result from a run in flight; there is no run. An empty table here is
+the accurate final state as of 2026-08-01.
 
 | Field | Value |
 |---|---|

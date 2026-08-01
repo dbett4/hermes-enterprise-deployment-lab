@@ -1,4 +1,4 @@
-# ADR 004: Enforced approval gate, idempotent mutation, and a scoped tool surface
+# ADR 004: Enforced two-phase mutation guard, idempotency, and a scoped tool surface
 
 ## Status
 
@@ -51,7 +51,7 @@ different values. `POST /v1/incidents/{id}/actions` requires write scope, so
 "a read-only credential cannot mutate" is a property of the API, not a promise
 in prose.
 
-### One mutating tool behind an enforcing gate
+### One mutating tool behind a two-phase guard
 
 `apply_incident_plan` is the only tool that changes anything.
 
@@ -62,8 +62,23 @@ in prose.
 | with a token bound to another incident or action | no write request, returns `approval_rejected` |
 | with the matching token | performs the write |
 
-Supplying the token is the human step. The unit tests assert "no write happened"
-against observed HTTP traffic, not against the response's own claim.
+What this enforces is exactly one thing: a single call can never mutate; a
+mutation requires a second call carrying a token minted by the first call's
+refusal. The unit tests assert "no write happened" against observed HTTP traffic,
+not against the response's own claim.
+
+**It is not a human-in-the-loop control, and this ADR does not claim it is.** The
+token is returned to the same caller that was refused, so an autonomous caller
+can self-approve immediately — `scripts/demo.sh` and every test do precisely
+that. No approver identity is recorded, there is no out-of-band channel, no
+expiry, and no second-party check. A real approval control was deferred by the
+owner on 2026-08-01; the four changes it would require are enumerated under
+"Roadmap — what a real approval control would require" in
+[`docs/architecture.md`](../architecture.md).
+
+*(Correction, 2026-08-01: this section previously read "Supplying the token is
+the human step." That was false as written and is retained here only to record
+what changed.)*
 
 ### Idempotency is minted with the approval, not with the attempt
 
@@ -118,7 +133,19 @@ replay, and failure — each with a correlation ID and a run ID.
 
 ## What this ADR still does not claim
 
-- No model has chosen or invoked any of these tools. Every invocation in this
-  repository is made by a script.
+- **No model has chosen or invoked any of these tools, and none will.** Every
+  invocation in this repository is made by a script or a test. A model-driven run
+  requires provider spend, which the owner declined on 2026-08-01. This is a
+  permanent limit, not a pending task. The Hermes involvement that is real is
+  discovery: a real `hermes` build connects over stdio and enumerates the tools.
+- **The guard is two-call, not two-party.** Nothing requires, records, or can
+  require a human.
+- The approval store is an unauthenticated JSON file; anything that can write
+  `APPROVAL_STORE_PATH` can plant a token the guard accepts.
+- `validate()` does not read `status`, so a token is never consumed or expired.
+- "Exactly once" is per approval, not per action: two approvals for the same
+  `action_id` carry two idempotency keys and produce two records.
+- The audit log is append-only by convention, not tamper-evident, and the
+  enterprise API keeps no audit of its own.
 - Hermes's own `tools.include` enforcement against a model is unproven here.
 - The GitHub Actions workflow has never executed; the repository has no remote.

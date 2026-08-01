@@ -60,9 +60,9 @@ A read-scope token presented to the mutating endpoint returns `403`. If no write
 token is configured, `apply_incident_plan` cannot mutate and says so in its
 response (`credential_scope: read_token_only`).
 
-## Approval enforcement
+## Two-phase mutation guard (not human approval)
 
-`apply_incident_plan` is the only mutating tool, and it is gated at runtime:
+`apply_incident_plan` is the only mutating tool, and it is guarded at runtime:
 
 - Called without `approval_token`, it issues a token and sends **no write
   request** — asserted in tests against observed HTTP traffic, not against the
@@ -72,9 +72,29 @@ response (`credential_scope: read_token_only`).
 - The approval carries an idempotency key, so a resume after a failure replays
   rather than re-applies.
 
-Limits worth stating plainly: this gate lives in the workflow layer. It is not a
-Hermes policy control and not an API-side authorization rule. A different client
-holding the write token could call the enterprise API directly and bypass it.
+**This is not a human-in-the-loop control.** The token is returned to the same
+caller that was just refused, so an autonomous caller can self-approve on its next
+call — the demo and every test in this repository do exactly that. What is
+enforced is that a *single* call can never mutate. No approver identity is
+recorded and no second party is involved or possible. A real approval control was
+deferred on 2026-08-01; its requirements are listed under "Known limitations and
+roadmap" in `README.md`.
+
+Further limits worth stating plainly:
+
+- The guard lives in the workflow layer. It is not a Hermes policy control and
+  not an API-side authorization rule. A different client holding the write token
+  could call the enterprise API directly and bypass it — and because the
+  enterprise API keeps no audit of its own, that write would leave no trace.
+- **The approval store is unauthenticated.** It is a plain JSON dict keyed by
+  token string at `APPROVAL_STORE_PATH`, with no HMAC, signature, or ownership
+  check. Anything with write access to that path in the server's trust domain can
+  plant a token the guard will accept. Trusted-filesystem-only, by design.
+- **Approvals are never consumed or expired.** `validate()` does not read the
+  approval's `status`, so a token marked `applied` still authorizes a new commit
+  if the downstream idempotency key is no longer held.
+- **Deduplication is per approval, not per action.** Two approvals for the same
+  `action_id` carry two idempotency keys and produce two records.
 
 ## Tool-surface scoping
 
@@ -92,6 +112,11 @@ distinguish an enforced include list from an ignored one.
 request/grant/rejection, mutation attempt, commit, replay, and failure, each with
 a correlation ID and run ID. It is gitignored; scrub before sharing.
 
+It is append-only **by convention**, not tamper-evident: a plain `.jsonl` file
+with no signature, chain hash, or WORM property. `run_started` and `run_finished`
+carry a null correlation ID. The enterprise API writes no audit of its own, so
+the log records only what the workflow runner chose to report.
+
 ## Supported use
 
 - Local Python or Podman Compose on a developer machine
@@ -101,4 +126,9 @@ a correlation ID and run ID. It is gitignored; scrub before sharing.
 ## Out of scope
 
 OIDC, Kubernetes hardening, production secret management, multi-process-safe
-approval storage, and any real external mutation.
+approval storage, authenticated approval storage, any real human-in-the-loop
+approval control, and any real external mutation.
+
+No LLM has ever invoked these tools and none will: a model-driven run requires
+provider spend that was declined on 2026-08-01. Every call in this repository is
+made by a script or a test. Hermes's role here is discovery and enumeration only.

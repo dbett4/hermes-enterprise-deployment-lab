@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# One-command demo of the whole arc: scoped discovery -> read/plan -> approval
-# stop -> forced failure -> resume -> exactly-once -> audit trail.
+# One-command demo of the whole arc: scoped discovery -> read/plan -> two-phase
+# mutation guard -> forced failure -> resume -> exactly-once -> audit trail.
+#
+# The guard is not a human control: this script mints the approval token by
+# being refused, then replays that token to itself. STEP 4 says so out loud.
 #
 # Everything runs locally over MCP stdio. No LLM, no provider credits, no
-# network egress. Containers are optional: by default this boots the enterprise
+# network egress. No model has ever driven this arc and none will — provider
+# spend was declined on 2026-08-01. Containers are optional: by default this boots the enterprise
 # API directly with uvicorn so the demo is deterministic and CI-runnable.
 set -euo pipefail
 

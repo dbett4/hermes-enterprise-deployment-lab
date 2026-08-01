@@ -1,5 +1,26 @@
 # Hermes Enterprise Deployment Lab — Build Spec
 
+> **Read this first (added 2026-08-01).** This document is the *original target
+> spec*, kept for provenance. It is not a status report, and several of its
+> targets were not met. Where it and the shipped repository disagree, the
+> repository is authoritative — see `README.md`, and
+> [ADR 004](adr/004-enforced-approval-idempotency-and-scoped-tools.md).
+>
+> Three corrections that matter most:
+>
+> - Wherever this spec says "approval" or "approval-gated", what shipped is a
+>   **two-phase mutation guard**, not a human control. A single call cannot
+>   mutate; a mutation needs a second call carrying a token minted by a prior
+>   refusal. That token is returned to the caller that was refused, so a caller
+>   self-approves. No human approval control is implemented — deferred by the
+>   owner on 2026-08-01.
+> - Wherever this spec implies an agent or model drives the workflow, **no model
+>   ever has and none will.** Provider spend was declined on 2026-08-01. Every
+>   call in the repository comes from a script or a test; Hermes's real role is
+>   discovering and enumerating the MCP tool surface.
+> - The M5/CI and "pass CI" targets were **not met**: the repository has no
+>   remote and the workflow has never executed.
+
 ## Purpose
 
 Create truthful public proof that Dave can deploy, integrate, debug, and operate Hermes Agent in a customer-shaped environment. This is a portfolio system, not a tutorial screenshot and not a clone of private client infrastructure.
@@ -50,7 +71,7 @@ A fictional regulated-services company wants Hermes to coordinate an incident-in
 - Hermes loads the MCP server via isolated `HERMES_HOME` and discovers three prefixed tools.
 - FastMCP protocol smoke invokes all three tools deterministically.
 - One end-to-end incident workflow produces a structured local receipt.
-- Human approval is **represented** in receipts for consequential steps; no runtime approval gate or mutation execution.
+- Human approval is **represented** in receipts for consequential steps; no runtime approval gate or mutation execution. *(Superseded by ADR 004: a runtime two-phase mutation guard and one mutating tool now exist. A human-approval control still does not, and the word "human" in this line was never implemented in any form.)*
 - A failed dependency yields a useful recovery path rather than a generic error.
 
 Status: **Partial/Yellow** until local Hermes discovery proof passes alongside protocol proof. CI covers protocol + Compose only.

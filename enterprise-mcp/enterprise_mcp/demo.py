@@ -7,8 +7,9 @@ involves an LLM: the caller is this script, not a model.
 Arc:
     1. scoped surface      read/plan allowlist does not expose the mutating tool
     2. discovery           the write-enabled allowlist exposes exactly four tools
-    3. read + plan         context and an approval-gated plan
-    4. approval gate       apply without a token changes nothing
+    3. read + plan         context and a guarded plan
+    4. two-phase guard     apply without a token changes nothing; this script then
+                           replays the token to itself — no human is involved
     5. forced failure      post-commit fault; caller sees 5xx, resume info returned
     6. resume              same approval token and idempotency key -> replayed
     7. exactly-once        the store holds exactly one record
@@ -135,14 +136,14 @@ async def run_demo(
         return int(response.json()["count"])
 
     emit("=" * 72)
-    emit("HERMES ENTERPRISE DEPLOYMENT LAB - APPROVAL / IDEMPOTENCY / RESUME DEMO")
+    emit("HERMES ENTERPRISE DEPLOYMENT LAB - TWO-PHASE GUARD / IDEMPOTENCY / RESUME")
     emit("=" * 72)
     emit(f"run_id       : {run_id}")
     emit(f"enterprise   : {api_url}")
     emit(f"incident     : {incident_id}")
     emit(f"action       : {action_id}")
     emit(f"audit log    : {audit_path}")
-    emit("caller       : this script over MCP stdio (no LLM in the loop)")
+    emit("caller       : this script over MCP stdio (no LLM in the loop, ever)")
 
     audit.append("run_started", incident_id=incident_id, action_id=action_id, actor="demo")
 
@@ -208,8 +209,8 @@ async def run_demo(
         )
         record("plan", outcome=plan.get("outcome"), approval_required=plan.get("approval_required"))
 
-        # 4. Approval gate --------------------------------------------------
-        step(4, "approval gate: apply WITHOUT a token")
+        # 4. Two-phase mutation guard ---------------------------------------
+        step(4, "two-phase guard: apply WITHOUT a token")
         before = store_count()
         pending = _unwrap(
             await client.call_tool(
@@ -233,7 +234,26 @@ async def run_demo(
         if before != after:
             raise DemoFailure("un-approved call changed the store")
         approval_token = pending["approval_token"]
-        record("approval_gate", status=pending.get("status"), store_before=before, store_after=after)
+        # Be explicit about what happens next. The token just came back to the
+        # same caller that was refused, and this script is about to replay it.
+        # That is the honest shape of the control: two calls, not two parties.
+        emit("")
+        emit("  what was enforced: ONE call cannot mutate. A mutation needs a")
+        emit("  SECOND call carrying a token minted by the first call's refusal.")
+        emit("  what was NOT enforced: any human involvement. The token above was")
+        emit("  handed back to this script, and this script now replays it to")
+        emit("  itself in STEP 5. No approver identity, no expiry, no second party.")
+        emit("  A real human-in-the-loop control is not implemented — see the")
+        emit("  roadmap entry in docs/architecture.md.")
+        emit("")
+        record(
+            "two_phase_guard",
+            status=pending.get("status"),
+            store_before=before,
+            store_after=after,
+            self_approved_by_caller=True,
+            human_in_the_loop=False,
+        )
 
     # 5. Forced failure -----------------------------------------------------
     step(5, "forced failure: post-commit fault (ENTERPRISE_INJECT_FAILURE=error_after_commit)")
@@ -347,7 +367,10 @@ async def run_demo(
 
     emit("")
     emit("=" * 72)
-    emit("DEMO PASSED - approval enforced, failure survived, exactly one side effect")
+    emit(
+        "DEMO PASSED - two-phase guard enforced (self-approved by this script, "
+        "no human), failure survived, exactly one side effect"
+    )
     emit("=" * 72)
 
     return {
@@ -361,7 +384,9 @@ async def run_demo(
         "steps": steps,
         "not_proven": [
             "No LLM chose these tools; the caller is this script.",
-            "Hermes model-driven invocation is not exercised here.",
+            "Hermes model-driven invocation is not exercised here, and is not planned.",
+            "No human approved anything: this script minted the approval token and "
+            "replayed it to itself. The guard proven here is two-call, not two-party.",
         ],
     }
 

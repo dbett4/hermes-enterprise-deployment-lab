@@ -1,14 +1,29 @@
-"""Runtime human-approval gate.
+"""Runtime two-phase mutation guard.
 
-The gate is enforcing, not advisory. `ApprovalStore.request()` mints an
+This is NOT a human-in-the-loop control. Read the limitation below before
+describing it as one.
+
+The guard is enforcing, not advisory. `ApprovalStore.request()` mints an
 unguessable token and records it as `pending`; nothing is written to the
 enterprise API on that first call. The write only happens when a caller comes
-back with that exact token, bound to the same (incident_id, action_id). The
-human step is supplying the token out of band.
+back with that exact token, bound to the same (incident_id, action_id). What
+that guarantees is precise and narrow: a *single* call can never mutate, and a
+mutation always requires a second call carrying a token minted by a prior
+refusal.
+
+Limitation — the token is returned to the same caller that was just refused.
+There is no out-of-band channel, no approver identity, no expiry, and no
+second-party check, so an autonomous caller can self-approve in the next call.
+Every caller in this repository (the demo and the tests) does exactly that.
+
+A real human-in-the-loop control is a deliberate roadmap item and is NOT
+implemented. See "Roadmap — what a real approval control would require" in
+docs/architecture.md.
 
 The token is deliberately reusable until the mutation commits, because a failed
 attempt must be resumable. Once committed, the idempotency key carried alongside
-the approval prevents a second side effect.
+the approval prevents a second side effect. Note that `validate()` does not read
+`status`, so a token is never consumed and never expires.
 """
 
 from __future__ import annotations

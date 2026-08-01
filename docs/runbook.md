@@ -111,8 +111,14 @@ value from the read token. Set it in `.env` and in the MCP server env.
 
 ### `apply_incident_plan` keeps returning `pending_approval`
 
-That is the gate. Take the `approval_token` from the response and pass it back on
-the next call. A token is bound to one `incident_id` + `action_id` pair.
+That is the two-phase guard working as designed: the first call always refuses.
+Take the `approval_token` from the response and pass it back on the next call. A
+token is bound to one `incident_id` + `action_id` pair.
+
+Note what this does and does not mean. It guarantees that no single call mutates.
+It does **not** require a human — the token comes straight back to you and you can
+replay it yourself, which is what `scripts/demo.sh` does. Do not describe this as
+human approval.
 
 ### `approval_rejected: unknown_action_id`
 

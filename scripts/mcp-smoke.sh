@@ -164,7 +164,9 @@ payload = {
         ),
     },
     "not_proven": [
-        "No LLM chose or invoked any of these tools in this run.",
+        "No LLM chose or invoked any of these tools in this run, or in any run: "
+        "provider spend was declined on 2026-08-01 and no model-driven run is "
+        "planned. Hermes's role here is discovery and enumeration only.",
         "Hermes-side tools.include enforcement against a model is not exercised.",
     ],
 }

@@ -113,7 +113,8 @@ def propose_incident_plan(incident_id: str) -> dict[str, Any]:
         incident_id: Fixture incident identifier (for example INC-2026-0042).
 
     Returns a structured receipt with proposed actions. Consequential runbook steps
-    always require human approval; this tool never executes external changes.
+    are flagged `approval_required` and can only be executed through the two-phase
+    guard on `apply_incident_plan`; this tool never executes external changes.
     """
     client = _build_client()
     _audit_invocation(
@@ -138,11 +139,16 @@ def apply_incident_plan(
 ) -> dict[str, Any]:
     """Execute one approved runbook action against the enterprise API.
 
-    This is the only mutating tool. Calling it WITHOUT approval_token changes
-    nothing: it returns status "pending_approval" plus a single-purpose approval
-    token that a human must supply to proceed. Calling it again with that token
-    performs the write exactly once, because the approval carries an idempotency
-    key that survives a failure and resume.
+    This is the only mutating tool, and it is behind a two-phase guard. Calling it
+    WITHOUT approval_token changes nothing: it returns status "pending_approval"
+    plus a single-purpose approval token bound to this exact (incident_id,
+    action_id). Calling it again with that token performs the write exactly once,
+    because the approval carries an idempotency key that survives a failure and
+    resume.
+
+    The guard is NOT a human-in-the-loop control. The token is returned to the
+    same caller that was refused, and nothing verifies who supplies it on the
+    second call. What is enforced is only that one call can never mutate.
 
     Args:
         incident_id: Fixture incident identifier (for example INC-2026-0042).
