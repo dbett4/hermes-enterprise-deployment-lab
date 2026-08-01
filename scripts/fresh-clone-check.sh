@@ -54,7 +54,9 @@ echo "==> Creating a fresh virtualenv with ${PY} ($("$PY" -V 2>&1))"
   -r enterprise-mcp/requirements.txt
 
 echo "==> Running the test suite in the clone"
-.venv/bin/python -m pytest -q
+# -o addopts="" so the run prints its own summary line; the repo's default -q
+# suppresses it, and the summary is the evidence worth having.
+.venv/bin/python -m pytest -o addopts="" -q
 
 echo "==> Running the demo in the clone"
 cp .env.example .env
