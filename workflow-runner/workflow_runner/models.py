@@ -20,6 +20,9 @@ class ProposedAction(BaseModel):
     description: str
     approval_required: bool
     source: str
+    # Stable identifier a caller passes to the mutating tool. None for advisory
+    # actions that the workflow layer synthesised rather than read from a runbook.
+    action_id: str | None = None
 
 
 class WorkflowReceipt(BaseModel):

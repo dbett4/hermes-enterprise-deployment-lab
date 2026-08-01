@@ -26,16 +26,19 @@ RUNBOOKS: dict[str, dict[str, Any]] = {
         "owner_team": "platform-oncall",
         "steps": [
             {
+                "step_id": "RB-PAY-GATEWAY-01-S1",
                 "order": 1,
                 "action": "Confirm synthetic monitor status and recent deploys",
                 "approval_required": False,
             },
             {
+                "step_id": "RB-PAY-GATEWAY-01-S2",
                 "order": 2,
                 "action": "Scale payment-gateway replicas by +1 if CPU > 75%",
                 "approval_required": True,
             },
             {
+                "step_id": "RB-PAY-GATEWAY-01-S3",
                 "order": 3,
                 "action": "Page payments SRE if latency remains above SLO for 15 minutes",
                 "approval_required": True,

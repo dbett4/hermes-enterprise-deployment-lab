@@ -13,5 +13,7 @@ venv/
 receipts/
 .smoke-receipts/
 .mcp-receipts/
+.audit/
+.recordings/
 *.log
 .DS_Store

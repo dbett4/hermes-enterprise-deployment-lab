@@ -2,15 +2,28 @@
 
 ## Quick commands
 
+No containers needed for the main arc:
+
 ```bash
 cp .env.example .env
-export ENTERPRISE_API_TOKEN=lab-read-token
-podman compose up -d --build --wait
+.venv/bin/python -m pytest -q
+./scripts/demo.sh
+```
+
+With containers and Hermes:
+
+```bash
+podman machine start                 # if the default machine is stopped
+podman compose up -d --build
 ./scripts/smoke.sh
-./scripts/mcp-smoke.sh
-./scripts/hermes-mcp-proof.sh
+ENTERPRISE_API_URL=http://127.0.0.1:8080 ./scripts/mcp-smoke.sh
+ENTERPRISE_API_URL=http://127.0.0.1:8080 ./scripts/hermes-tool-filter-proof.sh
 podman compose down -v
 ```
+
+`workflow-runner` runs to completion and exits 0 by design. Some compose
+providers treat that as a failure under `--wait`; the API service is the one that
+must be healthy.
 
 ## Health checks
 
@@ -19,20 +32,27 @@ podman compose down -v
 | `GET /healthz` | Process is alive |
 | `GET /readyz` | Service finished startup and can serve traffic |
 
-Compose waits on `enterprise-api` health before smoke uses the stack.
-
-## MCP discovery and smoke
+## Scripts
 
 | Command | Purpose |
 |---|---|
-| `fastmcp inspect enterprise-mcp/enterprise_mcp/server.py:mcp` | Summarize MCP server capabilities |
-| `fastmcp list --command ./scripts/run-enterprise-mcp.sh --json` | List the three tools |
-| `./scripts/mcp-smoke.sh` | FastMCP protocol calls + Hermes discovery (default) |
-| `MCP_SMOKE_PROTOCOL_ONLY=1 ./scripts/mcp-smoke.sh` | Protocol proof only (CI) |
+| `./scripts/demo.sh` | The full arc, self-contained; boots its own API unless `ENTERPRISE_API_URL` is healthy |
+| `./scripts/smoke.sh` | Containerized workflow-runner receipt |
+| `./scripts/mcp-smoke.sh` | FastMCP protocol proof (explicit credentials + negative control) plus Hermes discovery |
+| `MCP_SMOKE_PROTOCOL_ONLY=1 ./scripts/mcp-smoke.sh` | Protocol proof only (CI, no Hermes CLI) |
 | `./scripts/hermes-mcp-proof.sh` | Isolated Hermes discovery receipt |
-| `./scripts/emit-hermes-mcp-config.sh` | Emit Hermes config with absolute paths |
+| `./scripts/hermes-tool-filter-proof.sh` | Differential scope proof: Hermes sees 4 tools vs 1 |
+| `./scripts/fresh-clone-check.sh` | Clone HEAD to a temp dir, fresh venv, full suite + demo |
+| `./scripts/record-demo.sh` | asciinema cast if available, otherwise a text transcript + a recording plan |
+| `./scripts/emit-hermes-mcp-config.sh <root> [tools]` | Emit Hermes config with absolute paths and a server-side allowlist |
 
-### Hermes MCP test (isolated)
+`fastmcp inspect` is fine for a capability summary. Do **not** use the fastmcp
+CLI's command-spawning subcommands to prove credential handling: they cannot pass
+`env` to the server, and MCP stdio forwards only
+`HOME`, `LOGNAME`, `PATH`, `SHELL`, `USER`. That is exactly how this repo once
+"proved" credentials that were never delivered — see ADR 004.
+
+## Hermes MCP test (isolated)
 
 ```bash
 export ENTERPRISE_API_TOKEN=lab-read-token
@@ -40,109 +60,137 @@ export HERMES_HOME=/tmp/hermes-mcp-lab
 mkdir -p "$HERMES_HOME"
 {
   echo "_config_version: 9"
-  ./scripts/emit-hermes-mcp-config.sh
+  ./scripts/emit-hermes-mcp-config.sh "$PWD" all
 } > "$HERMES_HOME/config.yaml"
 hermes mcp test enterprise_ops
 ```
 
-Expected prefixed tools: `mcp__enterprise_ops__check_enterprise_api`, `mcp__enterprise_ops__get_incident_context`, `mcp__enterprise_ops__propose_incident_plan`.
+Hermes prints **bare** tool names (`check_enterprise_api`, …). It does not print
+the `mcp__enterprise_ops__*` prefixed form, so do not expect it in the output.
 
-Hermes `mcp test` proves discovery only. Tool invocation is proven via FastMCP in `mcp-smoke.sh`.
+`hermes mcp test` proves discovery only: no LLM, no provider call, no invocation.
 
 ## Troubleshooting
+
+### `enterprise-mcp configuration error: ENTERPRISE_API_TOKEN is not set`
+
+Working as designed. The server has no default token. Pass it explicitly in the
+client's stdio `env=`, or in the Hermes `env:` block. Exporting it in your shell
+is **not** enough for an MCP subprocess.
 
 ### Smoke fails with connection refused on port 8080
 
 1. `podman compose ps`
 2. `podman compose logs enterprise-api`
-3. Ensure the Podman machine is running: `podman machine start`
+3. `podman machine start`
 
-### MCP smoke fails before FastMCP calls
+### MCP smoke fails before the protocol calls
 
-Ensure `ENTERPRISE_API_URL` points at the published Compose port (`http://127.0.0.1:8080` from the host). Inside containers use `http://enterprise-api:8080`.
+`ENTERPRISE_API_URL` must point at the published Compose port
+(`http://127.0.0.1:8080` from the host). Inside containers use
+`http://enterprise-api:8080`.
 
 ### MCP smoke fails: hermes CLI not found
 
-Full smoke requires Hermes CLI on PATH. For protocol-only proof: `MCP_SMOKE_PROTOCOL_ONLY=1 ./scripts/mcp-smoke.sh`.
+Full smoke requires Hermes on PATH. For protocol-only proof:
+`MCP_SMOKE_PROTOCOL_ONLY=1 ./scripts/mcp-smoke.sh`.
 
-### Hermes MCP discovery fails
+### `ModuleNotFoundError: workflow_runner`
 
-1. Export `ENTERPRISE_API_TOKEN` before `hermes mcp test` (config uses `${ENTERPRISE_API_TOKEN}`).
-2. Confirm `PYTHONPATH` includes `<repo>/enterprise-mcp` and `<repo>/workflow-runner` in the server `env` block.
-3. Run `fastmcp list --command ./scripts/run-enterprise-mcp.sh --json` with the same `PYTHONPATH`.
-4. Check `hermes mcp test enterprise_ops` against an isolated `HERMES_HOME`, not `~/.hermes`.
-
-### Missing MCP dependency (`ModuleNotFoundError: workflow_runner`)
-
-Set `PYTHONPATH` in the MCP server env or install deps: `pip install -r requirements-dev.txt -r workflow-runner/requirements.txt -r enterprise-mcp/requirements.txt`.
+Set `PYTHONPATH` to include `<repo>/enterprise-mcp` and `<repo>/workflow-runner`
+in the MCP server env, or install the requirements files.
 
 ### `401 Missing bearer token`
 
-The workflow runner, MCP server, or curl call did not send an `Authorization: Bearer …` header. Confirm `.env` contains `ENTERPRISE_API_TOKEN=lab-read-token` or export it in the shell.
+No `Authorization: Bearer …` header was sent.
 
-### `403 Invalid or insufficient token scope` / `auth_failure` receipt
+### `403` on a mutation / `auth_failure` with `credential_scope: read_token_only`
 
-Token mismatch between client and API. Recovery:
+The write endpoint requires `ENTERPRISE_API_WRITE_TOKEN`, which is a different
+value from the read token. Set it in `.env` and in the MCP server env.
+
+### `apply_incident_plan` keeps returning `pending_approval`
+
+That is the gate. Take the `approval_token` from the response and pass it back on
+the next call. A token is bound to one `incident_id` + `action_id` pair.
+
+### `approval_rejected: unknown_action_id`
+
+`action_id` must be a `step_id` from the runbook, e.g. `RB-PAY-GATEWAY-01-S2`.
+`propose_incident_plan` returns them.
+
+### `approval_rejected: approval_token_bound_to_different_action`
+
+The token was issued for another step. Request a fresh one by calling without a
+token.
+
+### A mutation returned 500 — did it apply?
+
+Check `resume.resumable` in the response, then re-invoke with the same
+`approval_token`. If the write had already committed, you get
+`status: replayed` and no second record. Confirm with:
 
 ```bash
-export ENTERPRISE_API_TOKEN=lab-read-token
-podman compose up -d --wait
-./scripts/mcp-smoke.sh
+curl -s -H "Authorization: Bearer lab-read-token" \
+  http://127.0.0.1:8080/v1/incidents/INC-2026-0042/actions | python3 -m json.tool
 ```
 
-### `404 Incident not found`
+`count` must be 1.
 
-Use the fixture incident `INC-2026-0042` or extend fixtures in `enterprise-api/app/fixtures.py`.
-
-### `malformed_response` receipt
-
-Upstream returned non-JSON. Recovery:
+### Resetting the fixture store
 
 ```bash
-podman compose logs enterprise-api
-podman compose restart enterprise-api
-./scripts/mcp-smoke.sh
+curl -X POST -H "Authorization: Bearer lab-write-token" \
+  http://127.0.0.1:8080/v1/admin/reset-actions
 ```
 
-### Injected `500` during drill
+### Injected failures during drills
 
-Expected when calling with `?inject=error` or `X-Inject-Failure: error`. Remove the injection parameter to recover.
+| Trigger | Expected |
+|---|---|
+| `?inject=error` | 500, nothing persisted |
+| `?inject=error_after_commit` | 500, record **is** persisted — resume must replay |
+| `?inject=timeout` | Sleeps `INJECT_TIMEOUT_SECONDS` |
 
-### Injected timeout during drill
+Clear `ENTERPRISE_INJECT_FAILURE` to recover.
 
-Expected when calling with `?inject=timeout`. Default sleep is `INJECT_TIMEOUT_SECONDS` (2s in Compose). Reduce locally for faster drills.
-
-### Workflow or MCP receipt shows `outcome: error`
-
-Inspect `error.code` in the receipt or tool payload:
+### Receipt shows `outcome: error`
 
 | code | Meaning | Recovery |
 |---|---|---|
-| `auth_failure` | Token rejected | `export ENTERPRISE_API_TOKEN=lab-read-token` and re-run smoke |
-| `not_found` | Incident/runbook missing | Use valid fixture ID |
-| `timeout` | Upstream too slow | Check API health, reduce injection sleep |
+| `auth_failure` | Token rejected or wrong scope | Check read vs write token |
+| `not_found` | Incident/runbook missing | Use `INC-2026-0042` |
+| `bad_request` | Missing idempotency key | The workflow layer supplies it; a raw curl must set `Idempotency-Key` |
+| `timeout` | Upstream too slow | Check API health, clear injection |
 | `malformed_response` | Non-JSON or wrong shape | `podman compose restart enterprise-api` |
-| `upstream_5xx` | API error | Check API logs, clear failure injection |
+| `upstream_5xx` | API error, possibly injected | Clear injection, then resume with the same approval token |
 
-### Correlation ID inspection
+### Reading the audit trail
 
-- API responses include `X-Correlation-ID`.
-- Workflow receipts and MCP tool payloads include run-level `correlation_id`.
-- Each `dependency_calls[]` entry has its own `correlation_id` when returned by the API.
+```bash
+python3 -m json.tool < /dev/null  # (jq is not required)
+cat .audit/demo-audit.jsonl | while read -r line; do
+  python3 -c "import json,sys; e=json.loads(sys.argv[1]); print(e['seq'], e['event'], e.get('outcome'), e.get('correlation_id'))" "$line"
+done
+```
 
 ## Receipt locations
 
 | Path | Contents |
 |---|---|
 | `.smoke-receipts/workflow-receipt.json` | Workflow runner smoke receipt |
-| `.mcp-receipts/mcp-smoke-receipt.json` | FastMCP protocol + Hermes discovery proof |
-| `.mcp-receipts/hermes-mcp-proof.json` | Hermes-only discovery receipt |
+| `.smoke-receipts/demo-receipt.json` | Demo arc result and step summary |
+| `.mcp-receipts/mcp-smoke-receipt.json` | Protocol + Hermes discovery summary |
+| `.mcp-receipts/fastmcp-protocol.json` | Protocol checks including the negative control |
+| `.mcp-receipts/hermes-mcp-proof.json` | Hermes discovery receipt |
+| `.mcp-receipts/hermes-tool-filter-proof.json` | Differential scope proof |
+| `.audit/*.jsonl` | Append-only audit trail |
 
-All directories are gitignored.
+All are gitignored.
 
 ## Security notes
 
 - Do not commit `.env`.
 - Do not embed tokens in committed YAML; use `${ENTERPRISE_API_TOKEN}`.
 - Do not merge lab MCP config into live `~/.hermes/config.yaml`.
-- Receipts are for local proof only; scrub before sharing externally.
+- Receipts and audit logs are local proof only; scrub before sharing.

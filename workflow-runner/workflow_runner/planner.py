@@ -40,6 +40,7 @@ def build_proposed_actions(incident: dict[str, Any], runbook: dict[str, Any]) ->
                 description=step["action"],
                 approval_required=bool(step.get("approval_required", True)),
                 source=runbook.get("runbook_id", "runbook"),
+                action_id=step.get("step_id"),
             )
         )
 

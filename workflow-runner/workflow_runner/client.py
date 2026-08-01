@@ -25,39 +25,63 @@ class EnterpriseApiClient:
         self.correlation_id = correlation_id or str(uuid.uuid4())
         self._transport = transport
 
-    def _headers(self) -> dict[str, str]:
-        return {
+    def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        headers = {
             "Authorization": f"Bearer {self.token}",
             "X-Correlation-ID": self.correlation_id,
             "Accept": "application/json",
         }
+        if extra:
+            headers.update(extra)
+        return headers
 
-    def _classify_http_error(self, response: httpx.Response) -> WorkflowError:
+    def _classify_http_error(
+        self, response: httpx.Response, call: DependencyCall | None = None
+    ) -> WorkflowError:
         if response.status_code in (401, 403):
             return WorkflowError(
                 WorkflowErrorCode.AUTH_FAILURE,
                 f"Authentication failed with status {response.status_code}",
                 self.correlation_id,
+                call,
             )
         if response.status_code == 404:
             return WorkflowError(
                 WorkflowErrorCode.NOT_FOUND,
                 "Requested resource was not found",
                 self.correlation_id,
+                call,
+            )
+        if response.status_code == 400:
+            return WorkflowError(
+                WorkflowErrorCode.BAD_REQUEST,
+                "Upstream rejected the request as malformed",
+                self.correlation_id,
+                call,
             )
         if response.status_code >= 500:
             return WorkflowError(
                 WorkflowErrorCode.UPSTREAM_5XX,
                 f"Upstream returned {response.status_code}",
                 self.correlation_id,
+                call,
             )
         return WorkflowError(
             WorkflowErrorCode.UNKNOWN,
             f"Unexpected status {response.status_code}",
             self.correlation_id,
+            call,
         )
 
-    def _request(self, method: str, path: str, name: str) -> tuple[dict[str, Any], DependencyCall]:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        name: str,
+        json_body: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        params: dict[str, str] | None = None,
+    ) -> tuple[dict[str, Any], DependencyCall]:
         started = time.perf_counter()
         call = DependencyCall(
             name=name,
@@ -74,7 +98,9 @@ class EnterpriseApiClient:
                 response = client.request(
                     method,
                     f"{self.base_url}{path}",
-                    headers=self._headers(),
+                    headers=self._headers(extra_headers),
+                    json=json_body,
+                    params=params,
                 )
         except httpx.TimeoutException as exc:
             call.elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -83,6 +109,7 @@ class EnterpriseApiClient:
                 WorkflowErrorCode.TIMEOUT,
                 f"{name} timed out after {self.timeout_seconds}s",
                 self.correlation_id,
+                call,
             ) from exc
         except httpx.HTTPError as exc:
             call.elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -91,6 +118,7 @@ class EnterpriseApiClient:
                 WorkflowErrorCode.UNKNOWN,
                 f"{name} request failed: {exc}",
                 self.correlation_id,
+                call,
             ) from exc
 
         call.elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -102,7 +130,7 @@ class EnterpriseApiClient:
 
         if response.status_code >= 400:
             call.error = response.text
-            raise self._classify_http_error(response)
+            raise self._classify_http_error(response, call)
 
         try:
             payload = response.json()
@@ -112,6 +140,7 @@ class EnterpriseApiClient:
                 WorkflowErrorCode.MALFORMED_RESPONSE,
                 f"{name} returned non-JSON payload",
                 self.correlation_id,
+                call,
             ) from exc
 
         if not isinstance(payload, dict):
@@ -120,6 +149,7 @@ class EnterpriseApiClient:
                 WorkflowErrorCode.MALFORMED_RESPONSE,
                 f"{name} returned unexpected JSON shape",
                 self.correlation_id,
+                call,
             )
 
         return payload, call
@@ -129,3 +159,28 @@ class EnterpriseApiClient:
 
     def get_runbook(self, incident_id: str) -> tuple[dict[str, Any], DependencyCall]:
         return self._request("GET", f"/v1/incidents/{incident_id}/runbook", "get_runbook")
+
+    def apply_action(
+        self,
+        incident_id: str,
+        action_id: str,
+        idempotency_key: str,
+        note: str | None = None,
+        inject: str | None = None,
+    ) -> tuple[dict[str, Any], DependencyCall]:
+        """POST a mutation carrying an idempotency key.
+
+        The key is what makes a resume safe: on replay the API returns the original
+        record with `replayed: true` instead of creating a second one.
+        """
+        return self._request(
+            "POST",
+            f"/v1/incidents/{incident_id}/actions",
+            "apply_incident_action",
+            json_body={"action_id": action_id, "note": note},
+            extra_headers={"Idempotency-Key": idempotency_key},
+            params={"inject": inject} if inject else None,
+        )
+
+    def list_actions(self, incident_id: str) -> tuple[dict[str, Any], DependencyCall]:
+        return self._request("GET", f"/v1/incidents/{incident_id}/actions", "list_incident_actions")

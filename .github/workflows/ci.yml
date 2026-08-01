@@ -13,28 +13,78 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          # Matches the version the suite is developed and run against locally.
+          python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt -r workflow-runner/requirements.txt -r enterprise-mcp/requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt \
+                      -r workflow-runner/requirements.txt \
+                      -r enterprise-mcp/requirements.txt
 
       - name: Run unit, contract, and MCP tests
-        run: python3 -m pytest -q
+        run: python -m pytest -q
 
       - name: FastMCP inspect MCP server
         run: |
           export PYTHONPATH="${PWD}/enterprise-mcp:${PWD}/workflow-runner"
           fastmcp inspect enterprise-mcp/enterprise_mcp/server.py:mcp
 
-      - name: Validate Compose file
-        run: podman compose config
+      - name: Validate Compose file parses
+        # Deliberately NOT `podman compose`: the GitHub runner has no podman and
+        # no compose provider, so that step would be a claim this job cannot
+        # actually make. Parsing the file is one it can.
+        run: python -c "import yaml; yaml.safe_load(open('compose.yaml')); print('compose.yaml parsed')"
 
-      - name: Build and smoke test stack (protocol proof)
+      - name: End-to-end demo (approval, forced failure, resume, exactly-once)
         run: |
           cp .env.example .env
-          podman compose up -d --build --wait
-          ./scripts/smoke.sh
+          PYTHON_BIN=$(which python) ./scripts/demo.sh
+
+      - name: MCP protocol smoke (protocol-only, no Hermes CLI)
+        run: |
+          export ENTERPRISE_API_TOKEN=lab-read-token
+          export ENTERPRISE_API_WRITE_TOKEN=lab-write-token
+          PYTHONPATH="${PWD}/enterprise-api" python -m uvicorn app.main:app \
+            --app-dir "${PWD}/enterprise-api" --host 127.0.0.1 --port 8080 --log-level warning &
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && break
+            sleep 0.5
+          done
           export PYTHONPATH="${PWD}/enterprise-mcp:${PWD}/workflow-runner"
-          export MCP_SMOKE_PROTOCOL_ONLY=1
-          ./scripts/mcp-smoke.sh
-          podman compose down -v
+          export ENTERPRISE_API_URL=http://127.0.0.1:8080
+          MCP_SMOKE_PROTOCOL_ONLY=1 PYTHON_BIN=$(which python) ./scripts/mcp-smoke.sh
+
+      - name: Upload receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: receipts
+          path: |
+            .mcp-receipts/
+            .smoke-receipts/
+            .audit/
+          if-no-files-found: warn
+
+  fresh-clone:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Reproduce from a clean clone of this commit
+        run: |
+          git clone --local . /tmp/fresh-clone
+          cd /tmp/fresh-clone
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt \
+                                -r workflow-runner/requirements.txt \
+                                -r enterprise-mcp/requirements.txt
+          .venv/bin/python -m pytest -q
+          cp .env.example .env
+          ./scripts/demo.sh
