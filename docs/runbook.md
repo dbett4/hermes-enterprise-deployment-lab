@@ -149,7 +149,8 @@ Check `resume.resumable` in the response, then re-invoke with the same
 `status: replayed` and no second record. Confirm with:
 
 ```bash
-curl -s -H "Authorization: Bearer lab-read-token" \
+AUTHORIZATION_HEADER="Authorization: Bearer <fixture-token>" # gitleaks:allow -- documented placeholder
+curl -s -H "$AUTHORIZATION_HEADER" \
   http://127.0.0.1:8080/v1/incidents/INC-2026-0042/actions | python3 -m json.tool
 ```
 
@@ -158,7 +159,8 @@ curl -s -H "Authorization: Bearer lab-read-token" \
 ### Resetting the fixture store
 
 ```bash
-curl -X POST -H "Authorization: Bearer lab-write-token" \
+AUTHORIZATION_HEADER="Authorization: Bearer <fixture-token>" # gitleaks:allow -- documented placeholder
+curl -X POST -H "$AUTHORIZATION_HEADER" \
   http://127.0.0.1:8080/v1/admin/reset-actions
 ```
 

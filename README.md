@@ -1,5 +1,25 @@
 # Hermes Enterprise Deployment Lab
 
+> **Provenance.** Sanitized public extract published August 2026. Public git history
+> is publication history, not the original private development timeline. Incident
+> `INC-2026-0042`, operators, and API data are fictional fixtures. No client data or
+> credentials appear in this repository. Private client history remains confidential;
+> public claims are limited to inspectable artifacts.
+
+## History and scope
+
+I built this lab organically in **July–August 2026**. Early August work covered Hermes
+MCP discovery, scoped tool surfaces, and a credential-injection regression
+(2026-08-01). Provider spend for model-driven invocation was declined that day, so
+every tool call in the repository comes from scripts or tests—not from a model. The
+separated operator-approval design landed 2026-08-11 ([ADR 005](docs/adr/005-separated-operator-approval.md)).
+The public extract was published later in August; GitHub dates mark publication, not a
+longer private timeline.
+
+This is a **synthetic lab**: mock enterprise API, fixture bearer tokens, in-memory
+writes, and **73** credential-free tests. It is not evidence of customer-environment
+deployment, production identity integration, or model-driven agent runs.
+
 I built this small deployment lab to work through the failure cases that matter
 when an agent can touch an internal system. It includes a mock enterprise API,
 a FastMCP stdio server, a workflow runner, and a separate operator command for
