@@ -101,7 +101,7 @@ the tools; `scripts/*.sh` and `pytest` call them.
 - This is not a production deployment: no OIDC, Kubernetes, real identity
   provider, cloud/hybrid scaling, or customer data. It has one deterministic
   incident (`INC-2026-0042`), and a "write" adds a record to an in-memory store.
-- Podman is tested; Docker is not.
+- CI parses `compose.yaml` but does not start containers; optional Podman/Docker smoke runs are not attested in the public tree.
 
 ## How it works
 
