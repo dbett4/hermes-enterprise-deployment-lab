@@ -37,7 +37,7 @@ jobs:
         # actually make. Parsing the file is one it can.
         run: python -c "import yaml; yaml.safe_load(open('compose.yaml')); print('compose.yaml parsed')"
 
-      - name: End-to-end demo (two-phase guard, forced failure, resume, exactly-once)
+      - name: End-to-end demo (separated approval, forced failure, resume, exactly-once)
         run: |
           cp .env.example .env
           PYTHON_BIN=$(which python) ./scripts/demo.sh

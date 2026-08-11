@@ -9,8 +9,8 @@ from workflow_runner.models import DependencyCall, ProposedAction, WorkflowRecei
 
 LIMITATIONS = [
     "This lab never executes consequential actions against external systems.",
-    "Proposed actions are advisory; executing one requires the two-phase guard on "
-    "apply_incident_plan, which is not a human-in-the-loop control.",
+    "Proposed actions are advisory; executing one requires a time-bound capability "
+    "granted through the separate approval-operator command.",
     "Fixture data covers a single deterministic incident for smoke and contract tests.",
 ]
 

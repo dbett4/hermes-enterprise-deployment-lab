@@ -1,17 +1,17 @@
-"""Two-phase-guarded, idempotent execution of a single runbook action.
+"""Operator-approved, idempotent execution of a single runbook action.
 
-The guard is not a human-in-the-loop control: the token minted below is returned
-to the same caller that was just refused. What it enforces is that a single call
-can never mutate. See `workflow_runner/approvals.py` for the full limitation.
+The mutating caller can request approval but cannot approve its own request.
+The separate operator command grants an expiring, single-purpose capability.
+See ``workflow_runner.approvals`` for the state machine and threat boundary.
 
 Control flow, in one place so it is auditable:
 
-    no approval_token  -> mint token, write NOTHING, return pending_approval
-    bad approval_token -> write NOTHING, return approval_rejected
-    good approval_token-> POST the mutation with the approval's idempotency key
+    no capability      -> mint approval ID, write NOTHING, return pending_approval
+    bad capability     -> write NOTHING, return approval_rejected
+    good capability    -> POST the mutation with the approval's idempotency key
                           success  -> applied  (new side effect)
                           replay   -> replayed (no new side effect)
-                          failure  -> error + resume instructions (same token/key)
+                          failure  -> error + resume instructions (same capability/key)
 
 The idempotency key is minted with the approval, not with the attempt, so a
 resume after a mid-flight failure reuses it automatically.
@@ -36,9 +36,10 @@ STATUS_ERROR = "error"
 
 APPLY_LIMITATIONS = [
     "The mutation target is a fixture action store inside the lab API, not a real system.",
-    "The two-phase guard is enforced in this workflow layer; it is not a Hermes-side policy control.",
-    "The approval token is returned to the caller that was refused, so a caller can self-approve. "
-    "This is not a human-in-the-loop control and no approver identity is recorded.",
+    "The approval gate is enforced in this workflow layer; it is not a Hermes-side policy control.",
+    "Approval is granted through a separate local operator command with a recorded identity; "
+    "the lab does not integrate a production identity provider or policy engine.",
+    "The local JSON approval store is suitable for this single-host lab, not concurrent production use.",
     "A resume reuses the approval's idempotency key, so the API returns the original record.",
     "Deduplication is keyed on the idempotency key, which is minted per approval: two approvals "
     "for the same action_id produce two records.",
@@ -60,7 +61,7 @@ def apply_incident_action(
     client: EnterpriseApiClient,
     incident_id: str,
     action_id: str,
-    approval_token: str | None = None,
+    approval_capability: str | None = None,
     note: str | None = None,
     inject: str | None = None,
     approvals: ApprovalStore | None = None,
@@ -131,16 +132,16 @@ def apply_incident_action(
             }
         )
 
-    # --- Gate 1: no token means no write, full stop. -------------------------
-    if not approval_token:
+    # --- Gate 1: the caller can request approval, but receives no secret. ----
+    if not approval_capability:
         approval = approvals.request(incident_id, action_id, client.correlation_id)
         audit.append(
             "approval_requested",
             correlation_id=client.correlation_id,
             incident_id=incident_id,
             action_id=action_id,
-            idempotency_key=approval.idempotency_key,
-            outcome="blocked_pending_approval_token",
+            approval_id=approval.approval_id,
+            outcome="blocked_pending_operator_approval",
         )
         return finish(
             {
@@ -150,26 +151,26 @@ def apply_incident_action(
                 "action_description": step.get("action"),
                 "correlation_id": client.correlation_id,
                 "side_effect": None,
-                "approval_token": approval.approval_token,
-                "idempotency_key": approval.idempotency_key,
+                "approval_id": approval.approval_id,
+                "approval_expires_at": approval.expires_at,
                 "next_step": (
-                    "No change has been made. To execute, re-invoke this tool with "
-                    "the approval_token above. This is a two-phase guard, not a "
-                    "human-in-the-loop control: nothing here verifies that a "
-                    "second party supplied the token."
+                    "No change has been made. A separate operator must run "
+                    "`python -m workflow_runner.approval_operator approve "
+                    f"{approval.approval_id} --approver <identity>` and deliver the "
+                    "resulting capability to the caller before it expires."
                 ),
             }
         )
 
-    # --- Gate 2: the token must be real and bound to this exact action. ------
-    approval, rejection = approvals.validate(approval_token, incident_id, action_id)
+    # --- Gate 2: capability must be granted, live, and bound to this action. -
+    approval, rejection = approvals.validate(approval_capability, incident_id, action_id)
     if approval is None:
         audit.append(
             "approval_rejected",
             correlation_id=client.correlation_id,
             incident_id=incident_id,
             action_id=action_id,
-            outcome=rejection or "invalid_approval_token",
+            outcome=rejection or "invalid_approval_capability",
         )
         return finish(
             {
@@ -179,17 +180,19 @@ def apply_incident_action(
                 "correlation_id": client.correlation_id,
                 "side_effect": None,
                 "reason": rejection,
-                "next_step": "Request a fresh approval token by calling without one.",
+                "next_step": "Request a fresh approval ID by calling without a capability.",
             }
         )
 
     audit.append(
-        "approval_granted",
+        "approval_capability_accepted",
         correlation_id=client.correlation_id,
         incident_id=incident_id,
         action_id=action_id,
         idempotency_key=approval.idempotency_key,
-        outcome="approved",
+        approval_id=approval.approval_id,
+        approved_by=approval.approved_by,
+        outcome="authorized",
     )
     audit.append(
         "mutation_attempted",
@@ -214,7 +217,7 @@ def apply_incident_action(
         if exc.call is not None:
             dependency_calls.append(exc.call)
         approvals.record_attempt(
-            approval.approval_token,
+            approval.approval_id,
             "failed",
             {"error_code": exc.code.value, "correlation_id": exc.correlation_id},
         )
@@ -238,10 +241,10 @@ def apply_incident_action(
                 "error": {"code": exc.code.value, "message": exc.message},
                 "resume": {
                     "resumable": True,
-                    "approval_token": approval.approval_token,
+                    "approval_id": approval.approval_id,
                     "idempotency_key": approval.idempotency_key,
                     "instruction": (
-                        "Re-invoke with the same approval_token. The idempotency key is "
+                        "Re-invoke with the same approval_capability. The idempotency key is "
                         "replayed, so if the write already committed no second side "
                         "effect is created."
                     ),
@@ -252,11 +255,11 @@ def apply_incident_action(
     replayed = bool(payload.get("replayed"))
     record = payload.get("record", {})
     approvals.record_attempt(
-        approval.approval_token,
+        approval.approval_id,
         "replayed" if replayed else "committed",
         {"record_id": record.get("record_id"), "correlation_id": client.correlation_id},
     )
-    approvals.mark_applied(approval.approval_token, record.get("record_id", ""))
+    approvals.mark_applied(approval.approval_id, record.get("record_id", ""))
     audit.append(
         "mutation_replayed" if replayed else "mutation_committed",
         correlation_id=client.correlation_id,

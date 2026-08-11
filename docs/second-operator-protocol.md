@@ -75,12 +75,13 @@ Check each of these in the printed transcript, and mark anything that differs:
 |---|---|---|
 | 1 | The read/plan allowlist does not expose `apply_incident_plan`, and calling it fails | STEP 1 |
 | 2 | The write-enabled allowlist exposes exactly four tools | STEP 2 |
-| 3 | Applying without an approval token returns `pending_approval` and the store count does not change. The transcript should also state plainly that the demo replays that token to itself and no human is involved | STEP 4 |
-| 4 | The injected post-commit fault returns `upstream_5xx` with resume instructions | STEP 5 |
-| 5 | Resuming with the same token returns `replayed` | STEP 6 |
-| 6 | The store contains exactly **one** record at the end | STEP 7 |
-| 7 | A read-only credential gets `auth_failure` and creates no record | STEP 8 |
-| 8 | The audit trail lists approval, failure, and replay events with correlation IDs | STEP 9 |
+| 3 | Applying without a capability returns `pending_approval`, only an opaque `approval_id`, and the store count does not change | STEP 4 |
+| 4 | A separate operator command records `demo-operator@example.com`; the capability is redacted and its plaintext is not stored | STEP 5 |
+| 5 | The injected post-commit fault returns `upstream_5xx` with resume instructions | STEP 6 |
+| 6 | Resuming with the same capability returns `replayed` | STEP 7 |
+| 7 | The store contains exactly **one** record and a later capability use is rejected as `approval_already_applied` | STEP 8 |
+| 8 | A read-only credential gets `auth_failure` and creates no record | STEP 9 |
+| 9 | The audit trail lists request, named grant, capability acceptance, failure, and replay events | STEP 10 |
 
 ## Step 5 — containers (optional, needs Podman)
 
@@ -114,9 +115,11 @@ Both use an isolated `HERMES_HOME` under your temp directory and must not touch
 
 Spend ten minutes trying to make the lab do something it claims it will not:
 
-- Call `apply_incident_plan` with a token you invented.
-- Call it with a token issued for a different `action_id`.
-- Retry the approved call many times and re-check the store count.
+- Call `apply_incident_plan` with a capability you invented.
+- Call it with a capability granted for a different `action_id`.
+- Try to use an opaque `approval_id` as if it were a capability.
+- Retry after a confirmed apply and verify no new HTTP mutation is dispatched.
+- Set `APPROVAL_TTL_SECONDS=1`, let a grant expire, and try to use it.
 - Set `ENTERPRISE_API_WRITE_TOKEN` to the read token and try to mutate.
 
 Record anything that succeeded when it should not have.

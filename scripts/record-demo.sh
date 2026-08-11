@@ -18,7 +18,7 @@ if command -v asciinema >/dev/null 2>&1; then
   CAST="${OUT_DIR}/demo-${STAMP}.cast"
   echo "==> Recording with asciinema -> ${CAST}"
   asciinema rec "$CAST" \
-    --title "Hermes enterprise lab: two-phase guard, forced failure, resume" \
+    --title "Hermes enterprise lab: separated approval, forced failure, resume" \
     --command "./scripts/demo.sh" \
     --overwrite
   echo

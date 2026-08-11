@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# One-command demo of the whole arc: scoped discovery -> read/plan -> two-phase
-# mutation guard -> forced failure -> resume -> exactly-once -> audit trail.
+# One-command demo of the whole arc: scoped discovery -> read/plan -> blocked
+# approval request -> separate operator command -> forced failure -> idempotent
+# resume -> terminal capability -> audit trail.
 #
-# The guard is not a human control: this script mints the approval token by
-# being refused, then replays that token to itself. STEP 4 says so out loud.
+# The script automates both roles for determinism, but crosses a distinct
+# operator-command boundary and records a fixture approver identity. This proves
+# structural separation, not a real person's identity or judgment.
 #
 # Everything runs locally over MCP stdio. No LLM, no provider credits, no
 # network egress. No model has ever driven this arc and none will — provider

@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (2026-08-01). Supersedes the approval and tool-surface sections of
+Accepted (2026-08-01); approval-control portion superseded by
+[ADR 005](005-separated-operator-approval.md) on 2026-08-11. Superseded the approval and tool-surface sections of
 [ADR 003](003-stdio-mcp-read-plan-tools.md), which remains accurate about the
 stdio transport choice.
 

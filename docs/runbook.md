@@ -111,29 +111,41 @@ value from the read token. Set it in `.env` and in the MCP server env.
 
 ### `apply_incident_plan` keeps returning `pending_approval`
 
-That is the two-phase guard working as designed: the first call always refuses.
-Take the `approval_token` from the response and pass it back on the next call. A
-token is bound to one `incident_id` + `action_id` pair.
+That is the approval gate working as designed: the caller only receives an
+opaque `approval_id`. A separate operator must grant it:
 
-Note what this does and does not mean. It guarantees that no single call mutates.
-It does **not** require a human — the token comes straight back to you and you can
-replay it yourself, which is what `scripts/demo.sh` does. Do not describe this as
-human approval.
+```bash
+export PYTHONPATH="$PWD/workflow-runner"
+export APPROVAL_STORE_PATH="$PWD/.audit/demo-approvals.json"
+export AUDIT_LOG_PATH="$PWD/.audit/demo-audit.jsonl"
+python -m workflow_runner.approval_operator approve <approval_id> \
+  --approver operator@example.com
+```
+
+Deliver the returned `approval_capability` to the MCP caller without logging it.
+The capability is bound to one `incident_id` + `action_id`, expires after
+`APPROVAL_TTL_SECONDS` (900 by default), and is terminal after a confirmed apply.
+The identity is recorded but not authenticated in this lab.
 
 ### `approval_rejected: unknown_action_id`
 
 `action_id` must be a `step_id` from the runbook, e.g. `RB-PAY-GATEWAY-01-S2`.
 `propose_incident_plan` returns them.
 
-### `approval_rejected: approval_token_bound_to_different_action`
+### `approval_rejected: approval_capability_bound_to_different_action`
 
-The token was issued for another step. Request a fresh one by calling without a
-token.
+The capability was granted for another step. Request a fresh approval ID by
+calling without a capability, then have an operator grant it.
+
+### `approval_rejected: approval_expired` or `approval_already_applied`
+
+Expired and applied approvals are terminal. Request and grant a new approval.
+Do not retry a capability after a confirmed `applied` or `replayed` response.
 
 ### A mutation returned 500 — did it apply?
 
 Check `resume.resumable` in the response, then re-invoke with the same
-`approval_token`. If the write had already committed, you get
+`approval_capability`. If the write had already committed, you get
 `status: replayed` and no second record. Confirm with:
 
 ```bash
@@ -169,7 +181,7 @@ Clear `ENTERPRISE_INJECT_FAILURE` to recover.
 | `bad_request` | Missing idempotency key | The workflow layer supplies it; a raw curl must set `Idempotency-Key` |
 | `timeout` | Upstream too slow | Check API health, clear injection |
 | `malformed_response` | Non-JSON or wrong shape | `podman compose restart enterprise-api` |
-| `upstream_5xx` | API error, possibly injected | Clear injection, then resume with the same approval token |
+| `upstream_5xx` | API error, possibly injected | Clear injection, then resume with the same approval capability before expiry |
 
 ### Reading the audit trail
 

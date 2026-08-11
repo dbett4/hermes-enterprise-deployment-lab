@@ -60,25 +60,28 @@ A read-scope token presented to the mutating endpoint returns `403`. If no write
 token is configured, `apply_incident_plan` cannot mutate and says so in its
 response (`credential_scope: read_token_only`).
 
-## Two-phase mutation guard (not human approval)
+## Separated operator approval
 
 `apply_incident_plan` is the only mutating tool, and it is guarded at runtime:
 
-- Called without `approval_token`, it issues a token and sends **no write
-  request** — asserted in tests against observed HTTP traffic, not against the
-  response body's own claim.
-- A forged token, or a token issued for a different incident or action, is
+- Called without `approval_capability`, it returns only an opaque `approval_id`
+  and sends **no write request** — asserted in tests against observed HTTP
+  traffic, not against the response body's own claim.
+- A separate `workflow_runner.approval_operator` command records the supplied
+  approver identity and yields an expiring capability once. Only the capability
+  hash is persisted.
+- A forged capability, or one granted for a different incident or action, is
   refused with no write request.
 - The approval carries an idempotency key, so a resume after a failure replays
   rather than re-applies.
+- Confirmed apply/replay makes the approval terminal; further presentation is
+  refused before dispatch.
 
-**This is not a human-in-the-loop control.** The token is returned to the same
-caller that was just refused, so an autonomous caller can self-approve on its next
-call — the demo and every test in this repository do exactly that. What is
-enforced is that a *single* call can never mutate. No approver identity is
-recorded and no second party is involved or possible. A real approval control was
-deferred on 2026-08-01; its requirements are listed under "Known limitations and
-roadmap" in `README.md`.
+**This is structural separation, not production identity assurance.** The MCP
+caller cannot approve its own request through the tool surface, but the lab does
+not authenticate the identity string supplied to the operator command. The demo
+automates both roles with a fixture identity so it remains deterministic; it does
+not prove a real person's identity or judgment.
 
 Further limits worth stating plainly:
 
@@ -87,12 +90,12 @@ Further limits worth stating plainly:
   could call the enterprise API directly and bypass it — and because the
   enterprise API keeps no audit of its own, that write would leave no trace.
 - **The approval store is unauthenticated.** It is a plain JSON dict keyed by
-  token string at `APPROVAL_STORE_PATH`, with no HMAC, signature, or ownership
-  check. Anything with write access to that path in the server's trust domain can
-  plant a token the guard will accept. Trusted-filesystem-only, by design.
-- **Approvals are never consumed or expired.** `validate()` does not read the
-  approval's `status`, so a token marked `applied` still authorizes a new commit
-  if the downstream idempotency key is no longer held.
+  opaque request ID at `APPROVAL_STORE_PATH`, with no signature or ownership
+  check. Hashing the capability prevents plaintext recovery from the file; it
+  does not protect the state from a local writer. Trusted-filesystem-only.
+- **Approval lifecycle is local.** `pending`, `approved`, `applied`, and
+  `expired` are enforced, but by a JSON file and an in-process lock rather than a
+  transactional authorization service.
 - **Deduplication is per approval, not per action.** Two approvals for the same
   `action_id` carry two idempotency keys and produce two records.
 
@@ -126,8 +129,8 @@ the log records only what the workflow runner chose to report.
 ## Out of scope
 
 OIDC, Kubernetes hardening, production secret management, multi-process-safe
-approval storage, authenticated approval storage, any real human-in-the-loop
-approval control, and any real external mutation.
+approval storage, authenticated approval identity, independent human judgment,
+and any real external mutation.
 
 No LLM has ever invoked these tools and none will: a model-driven run requires
 provider spend that was declined on 2026-08-01. Every call in this repository is

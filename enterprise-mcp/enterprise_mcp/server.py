@@ -113,8 +113,8 @@ def propose_incident_plan(incident_id: str) -> dict[str, Any]:
         incident_id: Fixture incident identifier (for example INC-2026-0042).
 
     Returns a structured receipt with proposed actions. Consequential runbook steps
-    are flagged `approval_required` and can only be executed through the two-phase
-    guard on `apply_incident_plan`; this tool never executes external changes.
+    are flagged `approval_required` and can only be executed with a capability
+    granted through the separate operator path; this tool never executes changes.
     """
     client = _build_client()
     _audit_invocation(
@@ -134,26 +134,24 @@ def propose_incident_plan(incident_id: str) -> dict[str, Any]:
 def apply_incident_plan(
     incident_id: str,
     action_id: str,
-    approval_token: str | None = None,
+    approval_capability: str | None = None,
     note: str | None = None,
 ) -> dict[str, Any]:
     """Execute one approved runbook action against the enterprise API.
 
-    This is the only mutating tool, and it is behind a two-phase guard. Calling it
-    WITHOUT approval_token changes nothing: it returns status "pending_approval"
-    plus a single-purpose approval token bound to this exact (incident_id,
-    action_id). Calling it again with that token performs the write exactly once,
-    because the approval carries an idempotency key that survives a failure and
-    resume.
-
-    The guard is NOT a human-in-the-loop control. The token is returned to the
-    same caller that was refused, and nothing verifies who supplies it on the
-    second call. What is enforced is only that one call can never mutate.
+    This is the only mutating tool, and it is behind a separated approval gate.
+    Calling it WITHOUT ``approval_capability`` changes nothing and returns only
+    an opaque ``approval_id``. A separate operator command records an approver
+    identity and returns a single-purpose, expiring capability. Supplying that
+    capability performs the write with an approval-scoped idempotency key that
+    survives an ambiguous failure and resume. A capability becomes terminal
+    after the workflow observes an applied or replayed result.
 
     Args:
         incident_id: Fixture incident identifier (for example INC-2026-0042).
         action_id: Runbook step identifier (for example RB-PAY-GATEWAY-01-S2).
-        approval_token: Token issued by a prior un-approved call. Omit to request approval.
+        approval_capability: Expiring capability delivered by the separate operator.
+            Omit to request approval; the request response never contains this secret.
         note: Optional operator note recorded with the side effect.
     """
     settings = load_settings()
@@ -163,13 +161,13 @@ def apply_incident_plan(
         correlation_id=client.correlation_id,
         incident_id=incident_id,
         action_id=action_id,
-        approval_token_presented=bool(approval_token),
+        approval_capability_presented=bool(approval_capability),
     )
     result = apply_incident_action(
         client,
         incident_id=incident_id,
         action_id=action_id,
-        approval_token=approval_token,
+        approval_capability=approval_capability,
         note=note,
         inject=settings.inject_failure,
     )

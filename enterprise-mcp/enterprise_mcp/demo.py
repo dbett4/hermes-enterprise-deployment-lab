@@ -8,13 +8,13 @@ Arc:
     1. scoped surface      read/plan allowlist does not expose the mutating tool
     2. discovery           the write-enabled allowlist exposes exactly four tools
     3. read + plan         context and a guarded plan
-    4. two-phase guard     apply without a token changes nothing; this script then
-                           replays the token to itself — no human is involved
-    5. forced failure      post-commit fault; caller sees 5xx, resume info returned
-    6. resume              same approval token and idempotency key -> replayed
-    7. exactly-once        the store holds exactly one record
-    8. read-only scope     a write attempt with read scope is refused by the API
-    9. audit trail         append-only events for the whole run
+    4. approval request    caller gets an opaque ID and no capability; no write
+    5. operator approval   separate command records identity and grants capability
+    6. forced failure      post-commit fault; caller sees 5xx, resume info returned
+    7. resume              same capability and idempotency key -> replayed
+    8. exactly-once        the store holds exactly one record; grant is terminal
+    9. read-only scope     a write attempt with read scope is refused by the API
+   10. audit trail         append-only events for the whole run
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import argparse
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import uuid
 from contextlib import asynccontextmanager
@@ -136,7 +137,7 @@ async def run_demo(
         return int(response.json()["count"])
 
     emit("=" * 72)
-    emit("HERMES ENTERPRISE DEPLOYMENT LAB - TWO-PHASE GUARD / IDEMPOTENCY / RESUME")
+    emit("HERMES ENTERPRISE DEPLOYMENT LAB - SEPARATED APPROVAL / IDEMPOTENCY / RESUME")
     emit("=" * 72)
     emit(f"run_id       : {run_id}")
     emit(f"enterprise   : {api_url}")
@@ -159,6 +160,41 @@ async def run_demo(
         approval_path=approval_path,
         run_id=run_id,
     )
+
+    def operator_approve(approval_id: str, approver: str) -> str:
+        operator_env = os.environ.copy()
+        operator_env.update(
+            {
+                "PYTHONPATH": f"{REPO_ROOT / 'workflow-runner'}",
+                "APPROVAL_STORE_PATH": str(approval_path),
+                "AUDIT_LOG_PATH": str(audit_path),
+                "AUDIT_RUN_ID": run_id,
+            }
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "workflow_runner.approval_operator",
+                "approve",
+                approval_id,
+                "--approver",
+                approver,
+            ],
+            cwd=REPO_ROOT,
+            env=operator_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise DemoFailure(
+                f"operator approval failed ({completed.returncode}): {completed.stderr or completed.stdout}"
+            )
+        response = json.loads(completed.stdout)
+        if response.get("status") != "approved":
+            raise DemoFailure(f"operator approval was not granted: {response}")
+        return str(response["approval_capability"])
 
     # 1. Scoped surface -----------------------------------------------------
     step(1, "scoped permissions: read/plan allowlist")
@@ -209,8 +245,8 @@ async def run_demo(
         )
         record("plan", outcome=plan.get("outcome"), approval_required=plan.get("approval_required"))
 
-        # 4. Two-phase mutation guard ---------------------------------------
-        step(4, "two-phase guard: apply WITHOUT a token")
+        # 4. Separated approval request -------------------------------------
+        step(4, "approval request: caller receives no capability")
         before = store_count()
         pending = _unwrap(
             await client.call_tool(
@@ -219,12 +255,13 @@ async def run_demo(
         )
         after = store_count()
         show(
-            "apply_incident_plan (no token)",
+            "apply_incident_plan (no capability)",
             {
                 "status": pending.get("status"),
                 "side_effect": pending.get("side_effect"),
-                "approval_token": pending.get("approval_token"),
-                "idempotency_key": pending.get("idempotency_key"),
+                "approval_id": pending.get("approval_id"),
+                "approval_capability_present": "approval_capability" in pending,
+                "idempotency_key_present": "idempotency_key" in pending,
                 "next_step": pending.get("next_step"),
             },
         )
@@ -233,30 +270,33 @@ async def run_demo(
             raise DemoFailure(f"expected pending_approval, got {pending.get('status')}")
         if before != after:
             raise DemoFailure("un-approved call changed the store")
-        approval_token = pending["approval_token"]
-        # Be explicit about what happens next. The token just came back to the
-        # same caller that was refused, and this script is about to replay it.
-        # That is the honest shape of the control: two calls, not two parties.
-        emit("")
-        emit("  what was enforced: ONE call cannot mutate. A mutation needs a")
-        emit("  SECOND call carrying a token minted by the first call's refusal.")
-        emit("  what was NOT enforced: any human involvement. The token above was")
-        emit("  handed back to this script, and this script now replays it to")
-        emit("  itself in STEP 5. No approver identity, no expiry, no second party.")
-        emit("  A real human-in-the-loop control is not implemented — see the")
-        emit("  roadmap entry in docs/architecture.md.")
-        emit("")
+        if "approval_capability" in pending or "approval_token" in pending:
+            raise DemoFailure("the request response leaked an approval secret")
+        approval_id = pending["approval_id"]
         record(
-            "two_phase_guard",
+            "approval_request",
             status=pending.get("status"),
             store_before=before,
             store_after=after,
-            self_approved_by_caller=True,
-            human_in_the_loop=False,
+            approval_id=approval_id,
+            capability_returned_to_caller=False,
         )
 
-    # 5. Forced failure -----------------------------------------------------
-    step(5, "forced failure: post-commit fault (ENTERPRISE_INJECT_FAILURE=error_after_commit)")
+    # 5. Separate operator approval ----------------------------------------
+    step(5, "operator approval: separate command + recorded identity")
+    approver = "demo-operator@example.com"
+    approval_capability = operator_approve(approval_id, approver)
+    emit(f"operator command approved {approval_id} as {approver}")
+    emit("capability delivered to caller: yes (value redacted from transcript and store)")
+    record(
+        "operator_approval",
+        approval_id=approval_id,
+        approver=approver,
+        capability_redacted=True,
+    )
+
+    # 6. Forced failure -----------------------------------------------------
+    step(6, "forced failure: post-commit fault (ENTERPRISE_INJECT_FAILURE=error_after_commit)")
     fault_env = _server_env(enabled_tools=ALL_TOOLS, inject="error_after_commit", **base_env)
     async with _session(fault_env) as client:
         failed = _unwrap(
@@ -265,7 +305,7 @@ async def run_demo(
                 {
                     "incident_id": incident_id,
                     "action_id": action_id,
-                    "approval_token": approval_token,
+                    "approval_capability": approval_capability,
                 },
             )
         )
@@ -278,8 +318,8 @@ async def run_demo(
         raise DemoFailure(f"expected error, got {failed.get('status')}")
     record("forced_failure", status=failed.get("status"), error=failed.get("error"))
 
-    # 6/7. Resume + exactly-once -------------------------------------------
-    step(6, "resume with the same approval token")
+    # 7/8. Resume + exactly-once -------------------------------------------
+    step(7, "resume with the same approval capability")
     async with _session(write_env) as client:
         resumed = _unwrap(
             await client.call_tool(
@@ -287,7 +327,7 @@ async def run_demo(
                 {
                     "incident_id": incident_id,
                     "action_id": action_id,
-                    "approval_token": approval_token,
+                    "approval_capability": approval_capability,
                 },
             )
         )
@@ -301,17 +341,36 @@ async def run_demo(
         },
     )
 
-    step(7, "exactly-once check")
+    step(8, "exactly-once + terminal approval check")
     final_count = store_count()
     emit(f"records in the enterprise action store: {final_count}")
     if final_count != 1:
         raise DemoFailure(f"expected exactly one side effect, found {final_count}")
     if resumed.get("status") != "replayed":
         raise DemoFailure(f"expected replayed, got {resumed.get('status')}")
+    async with _session(write_env) as client:
+        terminal = _unwrap(
+            await client.call_tool(
+                "apply_incident_plan",
+                {
+                    "incident_id": incident_id,
+                    "action_id": action_id,
+                    "approval_capability": approval_capability,
+                },
+            )
+        )
+    emit(
+        "third use after terminal apply: "
+        f"status={terminal.get('status')} reason={terminal.get('reason')}"
+    )
+    if terminal.get("reason") != "approval_already_applied":
+        raise DemoFailure(f"expected terminal approval refusal, got {terminal}")
+    if store_count() != 1:
+        raise DemoFailure("terminal capability dispatched another side effect")
     record("resume", status=resumed.get("status"), store_count=final_count)
 
-    # 8. Read-only scope ----------------------------------------------------
-    step(8, "read-only credential cannot mutate")
+    # 9. Read-only scope ----------------------------------------------------
+    step(9, "read-only credential cannot mutate")
     read_only_env = _server_env(
         api_url=api_url,
         read_token=read_token,
@@ -327,13 +386,16 @@ async def run_demo(
                 "apply_incident_plan", {"incident_id": incident_id, "action_id": "RB-PAY-GATEWAY-01-S3"}
             )
         )
+        read_only_approval_id = pending_ro["approval_id"]
+    read_only_capability = operator_approve(read_only_approval_id, approver)
+    async with _session(read_only_env) as client:
         refused = _unwrap(
             await client.call_tool(
                 "apply_incident_plan",
                 {
                     "incident_id": incident_id,
                     "action_id": "RB-PAY-GATEWAY-01-S3",
-                    "approval_token": pending_ro["approval_token"],
+                    "approval_capability": read_only_capability,
                 },
             )
         )
@@ -353,8 +415,8 @@ async def run_demo(
         raise DemoFailure("read-only credential produced a side effect")
     record("read_only_scope", status=refused.get("status"), store_count=after_ro)
 
-    # 9. Audit --------------------------------------------------------------
-    step(9, "append-only audit trail for this run")
+    # 10. Audit -------------------------------------------------------------
+    step(10, "append-only audit trail for this run")
     events = audit.events_for_run(run_id)
     for event in events:
         emit(
@@ -368,8 +430,8 @@ async def run_demo(
     emit("")
     emit("=" * 72)
     emit(
-        "DEMO PASSED - two-phase guard enforced (self-approved by this script, "
-        "no human), failure survived, exactly one side effect"
+        "DEMO PASSED - separated approval enforced, failure survived, "
+        "exactly one side effect, capability terminal"
     )
     emit("=" * 72)
 
@@ -385,8 +447,9 @@ async def run_demo(
         "not_proven": [
             "No LLM chose these tools; the caller is this script.",
             "Hermes model-driven invocation is not exercised here, and is not planned.",
-            "No human approved anything: this script minted the approval token and "
-            "replayed it to itself. The guard proven here is two-call, not two-party.",
+            "The demo automates both roles: it invokes the separate operator command with "
+            "a fixture identity; it does not prove a real person's identity or judgment.",
+            "The approval store is a local JSON file, not a production identity/policy service.",
         ],
     }
 

@@ -24,5 +24,8 @@ async def test_demo_arc_passes_against_a_live_api(clean_action_store: str, tmp_p
     assert result["final_store_count"] == 1
     transcript = "\n".join(lines)
     assert "pending_approval" in transcript
+    assert "operator command approved" in transcript
+    assert "capability delivered to caller: yes (value redacted" in transcript
+    assert "approval_already_applied" in transcript
     assert "replayed" in transcript
     assert "DEMO PASSED" in transcript

@@ -6,9 +6,10 @@ that property against a real file.
 
 Event vocabulary (`event` field):
     tool_invoked          an MCP tool was called
-    approval_requested    a mutation was refused and an approval token was minted
-    approval_granted      a caller presented a valid approval token
-    approval_rejected     a caller presented a missing/invalid/mismatched token
+    approval_requested    a mutation was refused and an opaque request ID was minted
+    approval_granted      the separate operator approved a request with an identity
+    approval_capability_accepted  a live capability authorized a mutation attempt
+    approval_rejected     an approval request or capability was refused
     mutation_attempted    the write request left the workflow layer
     mutation_committed    the write created a new side effect
     mutation_replayed     the write matched an existing idempotency key; no new side effect

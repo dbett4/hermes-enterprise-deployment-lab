@@ -7,6 +7,7 @@ against observed traffic rather than against the return value's own claim.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -83,7 +84,16 @@ def _stores(tmp_path: Path) -> tuple[ApprovalStore, AuditLog]:
     )
 
 
-def test_missing_approval_issues_a_token_and_writes_nothing(api: RecordingApi, tmp_path: Path) -> None:
+def _grant(approvals: ApprovalStore, approval_id: str, actor: str = "operator@example.com") -> str:
+    grant, rejection = approvals.approve(approval_id, actor)
+    assert rejection is None
+    assert grant is not None
+    return grant.approval_capability
+
+
+def test_missing_approval_issues_only_an_id_and_writes_nothing(
+    api: RecordingApi, tmp_path: Path
+) -> None:
     approvals, audit = _stores(tmp_path)
     result = apply_incident_action(
         _client(api),
@@ -94,23 +104,26 @@ def test_missing_approval_issues_a_token_and_writes_nothing(api: RecordingApi, t
     )
     assert result["status"] == "pending_approval"
     assert result["side_effect"] is None
-    assert result["approval_token"].startswith("apv_")
+    assert result["approval_id"].startswith("apr_")
+    assert "approval_token" not in result
+    assert "approval_capability" not in result
+    assert "idempotency_key" not in result
     assert api.posts == [], "the gate must block before any write request is sent"
     assert [e["event"] for e in audit.read_events()] == ["approval_requested"]
 
 
-def test_forged_token_writes_nothing(api: RecordingApi, tmp_path: Path) -> None:
+def test_forged_capability_writes_nothing(api: RecordingApi, tmp_path: Path) -> None:
     approvals, audit = _stores(tmp_path)
     result = apply_incident_action(
         _client(api),
         incident_id="INC-2026-0042",
         action_id="RB-PAY-GATEWAY-01-S2",
-        approval_token="apv_not_a_real_token",
+        approval_capability="cap_not_a_real_capability",
         approvals=approvals,
         audit=audit,
     )
     assert result["status"] == "approval_rejected"
-    assert result["reason"] == "unknown_approval_token"
+    assert result["reason"] == "unknown_approval_capability"
     assert api.posts == []
 
 
@@ -128,18 +141,21 @@ def test_unknown_action_id_writes_nothing(api: RecordingApi, tmp_path: Path) -> 
     assert api.posts == []
 
 
-def test_token_bound_to_a_different_incident_is_refused(api: RecordingApi, tmp_path: Path) -> None:
+def test_capability_bound_to_a_different_incident_is_refused(
+    api: RecordingApi, tmp_path: Path
+) -> None:
     approvals, audit = _stores(tmp_path)
     approval = approvals.request("INC-OTHER", "RB-PAY-GATEWAY-01-S2")
+    capability = _grant(approvals, approval.approval_id)
     result = apply_incident_action(
         _client(api),
         incident_id="INC-2026-0042",
         action_id="RB-PAY-GATEWAY-01-S2",
-        approval_token=approval.approval_token,
+        approval_capability=capability,
         approvals=approvals,
         audit=audit,
     )
-    assert result["reason"] == "approval_token_bound_to_different_incident"
+    assert result["reason"] == "approval_capability_bound_to_different_incident"
     assert api.posts == []
 
 
@@ -152,13 +168,13 @@ def test_approved_call_writes_once_and_replays_thereafter(api: RecordingApi, tmp
         approvals=approvals,
         audit=audit,
     )
-    token = pending["approval_token"]
+    capability = _grant(approvals, pending["approval_id"])
 
     applied = apply_incident_action(
         _client(api),
         incident_id="INC-2026-0042",
         action_id="RB-PAY-GATEWAY-01-S2",
-        approval_token=token,
+        approval_capability=capability,
         approvals=approvals,
         audit=audit,
     )
@@ -166,17 +182,104 @@ def test_approved_call_writes_once_and_replays_thereafter(api: RecordingApi, tmp
         _client(api),
         incident_id="INC-2026-0042",
         action_id="RB-PAY-GATEWAY-01-S2",
-        approval_token=token,
+        approval_capability=capability,
         approvals=approvals,
         audit=audit,
     )
 
     assert applied["status"] == "applied"
-    assert replayed["status"] == "replayed"
-    assert len(api.posts) == 2, "two attempts were made"
+    assert approvals.get(pending["approval_id"]).status == "applied"
+    assert replayed["status"] == "approval_rejected"
+    assert replayed["reason"] == "approval_already_applied"
+    assert len(api.posts) == 1, "the terminal capability cannot dispatch again"
     assert len(api.records) == 1, "but only one side effect exists"
-    assert applied["idempotency_key"] == replayed["idempotency_key"]
 
     kinds = [event["event"] for event in audit.read_events()]
     assert kinds.count("mutation_committed") == 1
-    assert kinds.count("mutation_replayed") == 1
+    assert kinds.count("mutation_replayed") == 0
+
+
+def test_pending_request_cannot_be_used_as_a_capability(
+    api: RecordingApi, tmp_path: Path
+) -> None:
+    approvals, audit = _stores(tmp_path)
+    pending = apply_incident_action(
+        _client(api),
+        incident_id="INC-2026-0042",
+        action_id="RB-PAY-GATEWAY-01-S2",
+        approvals=approvals,
+        audit=audit,
+    )
+    result = apply_incident_action(
+        _client(api),
+        incident_id="INC-2026-0042",
+        action_id="RB-PAY-GATEWAY-01-S2",
+        approval_capability=pending["approval_id"],
+        approvals=approvals,
+        audit=audit,
+    )
+    assert result["reason"] == "unknown_approval_capability"
+    assert api.posts == []
+
+
+def test_expired_capability_is_terminal_and_writes_nothing(
+    api: RecordingApi, tmp_path: Path
+) -> None:
+    approvals = ApprovalStore(path=tmp_path / "approvals.json", ttl_seconds=30)
+    audit = AuditLog(path=tmp_path / "audit.jsonl", run_id="expiry-test")
+    requested_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    request = approvals.request(
+        "INC-2026-0042", "RB-PAY-GATEWAY-01-S2", now=requested_at
+    )
+    grant, rejection = approvals.approve(
+        request.approval_id,
+        "operator@example.com",
+        now=requested_at + timedelta(seconds=5),
+    )
+    assert rejection is None and grant is not None
+
+    result = apply_incident_action(
+        _client(api),
+        incident_id="INC-2026-0042",
+        action_id="RB-PAY-GATEWAY-01-S2",
+        approval_capability=grant.approval_capability,
+        approvals=approvals,
+        audit=audit,
+    )
+    assert result["status"] == "approval_rejected"
+    assert result["reason"] == "approval_expired"
+    assert approvals.get(request.approval_id).status == "expired"
+    assert api.posts == []
+
+
+def test_operator_identity_is_recorded_and_plaintext_capability_is_not(
+    tmp_path: Path,
+) -> None:
+    store_path = tmp_path / "approvals.json"
+    approvals = ApprovalStore(path=store_path)
+    request = approvals.request("INC-2026-0042", "RB-PAY-GATEWAY-01-S2")
+    capability = _grant(approvals, request.approval_id, "alice@example.com")
+    persisted = store_path.read_text(encoding="utf-8")
+    saved = approvals.get(request.approval_id)
+
+    assert saved is not None
+    assert saved.status == "approved"
+    assert saved.approved_by == "alice@example.com"
+    assert saved.capability_hash
+    assert capability not in persisted
+
+
+def test_expired_pending_request_cannot_be_approved(tmp_path: Path) -> None:
+    approvals = ApprovalStore(path=tmp_path / "approvals.json", ttl_seconds=10)
+    requested_at = datetime(2026, 8, 11, 12, 0, tzinfo=timezone.utc)
+    request = approvals.request(
+        "INC-2026-0042", "RB-PAY-GATEWAY-01-S2", now=requested_at
+    )
+    grant, rejection = approvals.approve(
+        request.approval_id,
+        "operator@example.com",
+        now=requested_at + timedelta(seconds=11),
+    )
+    assert grant is None
+    assert rejection == "approval_expired"
+    assert approvals.get(request.approval_id).status == "expired"

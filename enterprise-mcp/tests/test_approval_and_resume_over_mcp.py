@@ -17,6 +17,8 @@ from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 
 from workflow_runner.audit import AuditLog
+from workflow_runner.approval_operator import approve_request
+from workflow_runner.approvals import ApprovalStore
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHONPATH = f"{REPO_ROOT / 'enterprise-mcp'}:{REPO_ROOT / 'workflow-runner'}"
@@ -73,6 +75,18 @@ def _store_count(api_url: str) -> int:
     return int(response.json()["count"])
 
 
+def _approve(tmp_path: Path, approval_id: str, run_id: str = "mcp-arc-test") -> str:
+    grant, rejection = approve_request(
+        approval_id,
+        "test-operator@example.com",
+        approvals=ApprovalStore(path=tmp_path / "approvals.json"),
+        audit=AuditLog(path=tmp_path / "audit.jsonl", run_id=run_id),
+    )
+    assert rejection is None
+    assert grant is not None
+    return grant.approval_capability
+
+
 @pytest.mark.asyncio
 async def test_unapproved_call_makes_no_side_effect(clean_action_store: str, tmp_path: Path) -> None:
     api_url = clean_action_store
@@ -83,26 +97,35 @@ async def test_unapproved_call_makes_no_side_effect(clean_action_store: str, tmp
     payload = result.data
     assert payload["status"] == "pending_approval"
     assert payload["side_effect"] is None
-    assert payload["approval_token"].startswith("apv_")
+    assert payload["approval_id"].startswith("apr_")
+    assert "approval_capability" not in payload
+    assert "approval_token" not in payload
+    assert "idempotency_key" not in payload
     assert _store_count(api_url) == 0
 
 
 @pytest.mark.asyncio
-async def test_invalid_approval_token_is_refused(clean_action_store: str, tmp_path: Path) -> None:
+async def test_invalid_approval_capability_is_refused(
+    clean_action_store: str, tmp_path: Path
+) -> None:
     api_url = clean_action_store
     async with _client(_env(tmp_path, api_url)) as client:
         result = await client.call_tool(
             "apply_incident_plan",
-            {"incident_id": INCIDENT, "action_id": ACTION, "approval_token": "apv_forged"},
+            {
+                "incident_id": INCIDENT,
+                "action_id": ACTION,
+                "approval_capability": "cap_forged",
+            },
         )
     payload = result.data
     assert payload["status"] == "approval_rejected"
-    assert payload["reason"] == "unknown_approval_token"
+    assert payload["reason"] == "unknown_approval_capability"
     assert _store_count(api_url) == 0
 
 
 @pytest.mark.asyncio
-async def test_token_is_bound_to_the_approved_action(
+async def test_capability_is_bound_to_the_approved_action(
     clean_action_store: str, tmp_path: Path
 ) -> None:
     api_url = clean_action_store
@@ -110,17 +133,17 @@ async def test_token_is_bound_to_the_approved_action(
         pending = await client.call_tool(
             "apply_incident_plan", {"incident_id": INCIDENT, "action_id": ACTION}
         )
-        token = pending.data["approval_token"]
+        capability = _approve(tmp_path, pending.data["approval_id"])
         result = await client.call_tool(
             "apply_incident_plan",
             {
                 "incident_id": INCIDENT,
                 "action_id": "RB-PAY-GATEWAY-01-S3",
-                "approval_token": token,
+                "approval_capability": capability,
             },
         )
     assert result.data["status"] == "approval_rejected"
-    assert result.data["reason"] == "approval_token_bound_to_different_action"
+    assert result.data["reason"] == "approval_capability_bound_to_different_action"
     assert _store_count(api_url) == 0
 
 
@@ -131,19 +154,27 @@ async def test_approved_call_applies_exactly_once(clean_action_store: str, tmp_p
         pending = await client.call_tool(
             "apply_incident_plan", {"incident_id": INCIDENT, "action_id": ACTION}
         )
-        token = pending.data["approval_token"]
+        capability = _approve(tmp_path, pending.data["approval_id"])
         applied = await client.call_tool(
             "apply_incident_plan",
-            {"incident_id": INCIDENT, "action_id": ACTION, "approval_token": token},
+            {
+                "incident_id": INCIDENT,
+                "action_id": ACTION,
+                "approval_capability": capability,
+            },
         )
         again = await client.call_tool(
             "apply_incident_plan",
-            {"incident_id": INCIDENT, "action_id": ACTION, "approval_token": token},
+            {
+                "incident_id": INCIDENT,
+                "action_id": ACTION,
+                "approval_capability": capability,
+            },
         )
     assert applied.data["status"] == "applied"
     assert applied.data["replayed"] is False
-    assert again.data["status"] == "replayed"
-    assert again.data["side_effect"]["record_id"] == applied.data["side_effect"]["record_id"]
+    assert again.data["status"] == "approval_rejected"
+    assert again.data["reason"] == "approval_already_applied"
     assert _store_count(api_url) == 1
 
 
@@ -164,37 +195,53 @@ async def test_forced_failure_then_resume_leaves_one_side_effect(
         pending = await client.call_tool(
             "apply_incident_plan", {"incident_id": INCIDENT, "action_id": ACTION}
         )
-        token = pending.data["approval_token"]
+        capability = _approve(tmp_path, pending.data["approval_id"], run_id)
 
     async with _client(
         _env(tmp_path, api_url, inject="error_after_commit", run_id=run_id)
     ) as client:
         failed = await client.call_tool(
             "apply_incident_plan",
-            {"incident_id": INCIDENT, "action_id": ACTION, "approval_token": token},
+            {
+                "incident_id": INCIDENT,
+                "action_id": ACTION,
+                "approval_capability": capability,
+            },
         )
 
     assert failed.data["status"] == "error"
     assert failed.data["error"]["code"] == "upstream_5xx"
     assert failed.data["resume"]["resumable"] is True
-    assert failed.data["resume"]["approval_token"] == token
+    assert failed.data["resume"]["approval_id"] == pending.data["approval_id"]
+    assert "approval_capability" not in failed.data["resume"]
+    assert ApprovalStore(path=tmp_path / "approvals.json").get(
+        pending.data["approval_id"]
+    ).status == "approved"
     # The fault committed the record server-side even though the caller saw a 5xx.
     assert _store_count(api_url) == 1
 
     async with _client(_env(tmp_path, api_url, run_id=run_id)) as client:
         resumed = await client.call_tool(
             "apply_incident_plan",
-            {"incident_id": INCIDENT, "action_id": ACTION, "approval_token": token},
+            {
+                "incident_id": INCIDENT,
+                "action_id": ACTION,
+                "approval_capability": capability,
+            },
         )
 
     assert resumed.data["status"] == "replayed"
     assert resumed.data["replayed"] is True
+    assert ApprovalStore(path=tmp_path / "approvals.json").get(
+        pending.data["approval_id"]
+    ).status == "applied"
     assert _store_count(api_url) == 1, "resume must not create a second side effect"
 
     events = AuditLog(path=tmp_path / "audit.jsonl", run_id=run_id).events_for_run(run_id)
     kinds = [event["event"] for event in events]
     assert "approval_requested" in kinds
     assert "approval_granted" in kinds
+    assert "approval_capability_accepted" in kinds
     assert "mutation_failed" in kinds
     assert "mutation_replayed" in kinds
     assert kinds.count("mutation_committed") == 0, "the failing attempt never reported a commit"
@@ -208,12 +255,13 @@ async def test_read_only_credential_cannot_mutate(clean_action_store: str, tmp_p
         pending = await client.call_tool(
             "apply_incident_plan", {"incident_id": INCIDENT, "action_id": ACTION}
         )
+        capability = _approve(tmp_path, pending.data["approval_id"])
         result = await client.call_tool(
             "apply_incident_plan",
             {
                 "incident_id": INCIDENT,
                 "action_id": ACTION,
-                "approval_token": pending.data["approval_token"],
+                "approval_capability": capability,
             },
         )
     payload = result.data
