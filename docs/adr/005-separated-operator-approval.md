@@ -1,4 +1,4 @@
-# ADR 005: Separate approval request from operator grant
+# ADR 005: Move approval to a separate operator command
 
 ## Status
 
@@ -12,8 +12,8 @@ surface, and fail-closed credentials exist.
 The original two-call guard blocked the first mutation call but returned its
 approval token to the same caller. It therefore proved a write barrier, not role
 separation. The token never expired, `validate()` ignored lifecycle state, and
-an applied token could dispatch again. Those gaps made the control too weak for
-an enterprise-agent portfolio proof.
+an applied token could dispatch again. Those gaps made the control too weak to
+be useful.
 
 The lab must also preserve its strongest recovery property: when an upstream
 commits and then returns a 5xx, the caller must be able to retry without creating
@@ -41,16 +41,16 @@ Use two different surfaces:
 
 ## Consequences
 
-Positive:
+Benefits:
 
 - The agent-facing MCP surface cannot self-approve; it never receives a secret
   until an operator grants the opaque request through another command.
-- Approver identity, expiry, binding, and terminal behavior are machine-tested.
+- Approver identity recording, expiry, binding, and terminal behavior are tested.
 - Plaintext approval capabilities do not persist in the local store, logs, demo
   transcript, or MCP request response.
 - Recovery after a post-commit failure remains safe and demonstrable.
 
-Limitations:
+Limits:
 
 - `--approver` records a supplied identity; the lab does not authenticate it.
 - A local writer with access to `APPROVAL_STORE_PATH` can tamper with the store.
@@ -59,6 +59,5 @@ Limitations:
 - The workflow-layer gate can be bypassed by a client that holds the enterprise
   API write credential and calls the fixture API directly.
 
-These limitations are stated in the README and architecture document. The lab
-claims structural role separation and lifecycle enforcement, not production
-identity assurance.
+The code separates the caller and operator paths and enforces the grant
+lifecycle. It does not authenticate a production identity.

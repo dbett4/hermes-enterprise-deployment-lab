@@ -1,30 +1,31 @@
-# Hermes Enterprise Deployment Lab — Build Spec
+# Original build brief
 
-> **Read this first (added 2026-08-01).** This document is the *original target
-> spec*, kept for provenance. It is not a status report, and several of its
-> targets were not met. Where it and the shipped repository disagree, the
-> repository is authoritative — see `README.md`, and
+> This is the plan I started with, kept to show how the implementation changed.
+> It is not the current status. When it differs from the code or `README.md`,
+> the shipped repository is authoritative. See
 > [ADR 004](adr/004-enforced-approval-idempotency-and-scoped-tools.md).
 >
-> Three corrections that matter most:
+> Three changes matter most:
 >
 > - The original implementation shipped a two-call self-approval guard. It was
 >   superseded on 2026-08-11 by [ADR 005](adr/005-separated-operator-approval.md):
 >   the MCP caller receives only an opaque request ID, while a distinct operator
 >   command records identity and grants an expiring, terminal capability. The
 >   lab still does not authenticate that identity through an enterprise IdP.
-> - Wherever this spec implies an agent or model drives the workflow, **no model
->   ever has and none will.** Provider spend was declined on 2026-08-01. Every
+> - Wherever this brief implies an agent or model drives the workflow, that was
+>   not implemented. Provider spend was declined on 2026-08-01. Every
 >   call in the repository comes from a script or a test; Hermes's real role is
 >   discovering and enumerating the MCP tool surface.
-> - The M5/CI and "pass CI" targets were **not met**: the repository has no
->   remote and the workflow has never executed.
+> - The repository was later published. Its test matrix and separate fresh-clone
+>   job now run in GitHub Actions.
 
 ## Purpose
 
-Create truthful public proof that Dave can deploy, integrate, debug, and operate Hermes Agent in a customer-shaped environment. This is a portfolio system, not a tutorial screenshot and not a clone of private client infrastructure.
+Build a public system that shows how I deploy, integrate, and debug Hermes in a
+realistic local environment. It should be runnable code, not a screenshot or a
+copy of private client infrastructure.
 
-## Target role coverage
+## What the lab was intended to cover
 
 | Nous responsibility | Lab proof |
 |---|---|
@@ -73,7 +74,10 @@ A fictional regulated-services company wants Hermes to coordinate an incident-in
 - Human approval is **represented** in receipts for consequential steps; no runtime approval gate or mutation execution. *(Superseded first by ADR 004, then by ADR 005: one mutating tool now requires a capability granted through the separate operator command.)*
 - A failed dependency yields a useful recovery path rather than a generic error.
 
-Status: **Partial/Yellow** until local Hermes discovery proof passes alongside protocol proof. CI covers protocol + Compose only.
+Original status on 2026-08-01: **Partial/Yellow** while Hermes discovery was
+still outstanding. The shipped repository now includes the local Hermes
+discovery checks; CI covers the protocol, test suite, and fresh-clone path, not a
+live Hermes CLI run.
 
 ### M4 — Observability and failure injection
 
@@ -104,7 +108,7 @@ Status: **Partial/Yellow** until local Hermes discovery proof passes alongside p
 - Docker images and dependencies are pinned or bounded intentionally.
 - A reviewer can understand the security boundary and recovery behavior without reading all source files.
 
-## Definition of done
+## Original definition of done
 
 A fresh clone can start the stack, pass health and contract checks, execute the incident workflow, display correlated operational evidence, survive at least three injected failures with documented recovery, pass CI, and support a five-minute technical walkthrough without private context.
 

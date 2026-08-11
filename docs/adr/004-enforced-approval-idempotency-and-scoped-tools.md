@@ -1,4 +1,4 @@
-# ADR 004: Enforced two-phase mutation guard, idempotency, and a scoped tool surface
+# ADR 004: Add a write gate, idempotency, and server-side tool scoping
 
 ## Status
 
@@ -9,23 +9,23 @@ stdio transport choice.
 
 ## Context
 
-A review of the M3 lab found that four of the properties the repository implied
-were not actually implemented, and one that was implemented was broken:
+Reviewing the M3 lab exposed four missing controls and one broken credential
+path:
 
-1. **Approval was metadata, not a gate.** `approval_required: true` was a field
+1. **Approval was only metadata.** `approval_required: true` was a field
    in a receipt that nothing read. Every tool was read/plan-only, so there was
    no mutation for a gate to block.
-2. **No idempotency, checkpoint, or resume.** The strings `idempot`, `resume`,
+2. **There was no idempotency, checkpoint, or resume path.** The strings `idempot`, `resume`,
    `retry`, and `checkpoint` did not occur anywhere in the repository. There was
    no run identity and no side effect that could be duplicated.
-3. **Failure injection existed but proved nothing about recovery.** `?inject=error`
+3. **Failure injection did not exercise recovery.** `?inject=error`
    returned a 500; nothing exercised recovering from it.
-4. **Tool filtering was not enforced anywhere the lab could observe.** The Hermes
+4. **The visible tool list was not actually filtered.** The Hermes
    config carried a `tools.include` list, but `hermes mcp test` reports the
    server's advertised tools, not the filtered agent-visible set. Narrowing the
    include list to one entry still printed all three tools. The shipped list
    (3 of 3) was a no-op that looked identical to an enforced one.
-5. **Credentials were never injected into the MCP server.** `mcp.client.stdio.
+5. **Credentials never reached the MCP server.** `mcp.client.stdio.
    get_default_environment()` forwards only `HOME`, `LOGNAME`, `PATH`, `SHELL`,
    `USER`. The smoke script ran the server through the fastmcp CLI's
    command-spawning subcommands, which cannot pass `env`, so `ENTERPRISE_API_TOKEN`
@@ -103,9 +103,8 @@ server. Excluded tools are absent from `list_tools` and not callable. The defaul
 is read/plan only; the mutating tool is opt-in. An unknown name in the list is a
 configuration error rather than a silently ignored entry.
 
-This is enforcement the lab can prove, and — importantly — that Hermes can
-observe: `scripts/hermes-tool-filter-proof.sh` runs `hermes mcp test` against two
-configs and shows Hermes discovering 4 tools versus 1.
+`scripts/hermes-tool-filter-proof.sh` runs `hermes mcp test` against two server
+configurations and shows Hermes discovering 4 tools, then 1.
 
 ### Append-only audit trail
 
@@ -115,14 +114,14 @@ replay, and failure — each with a correlation ID and a run ID.
 
 ## Consequences
 
-**Positive**
+Benefits:
 
-- Approval, idempotency, resume, and scoping are executable claims with tests.
+- Approval, idempotency, resume, and scoping are implemented and tested.
 - A wrong credential now fails, so the credential assertions mean something.
 - The demo (`scripts/demo.sh`) is the same code path the tests exercise, so it
   cannot drift from reality.
 
-**Negative**
+Costs:
 
 - The lab now has a mutable surface, small as it is, and a fixture reset endpoint
   that exists purely for determinism.
@@ -132,13 +131,12 @@ replay, and failure — each with a correlation ID and a run ID.
   a different client that talked to the enterprise API directly with a write
   token would bypass it entirely.
 
-## What this ADR still does not claim
+## Limits at the time
 
-- **No model has chosen or invoked any of these tools, and none will.** Every
-  invocation in this repository is made by a script or a test. A model-driven run
-  requires provider spend, which the owner declined on 2026-08-01. This is a
-  permanent limit, not a pending task. The Hermes involvement that is real is
-  discovery: a real `hermes` build connects over stdio and enumerates the tools.
+- No model chooses or invokes these tools. Scripts and tests make every call. A
+  model-driven run requires provider spend, which I declined on 2026-08-01. A
+  real `hermes` build connects over stdio and lists the tools, but does not call
+  them.
 - **The guard is two-call, not two-party.** Nothing requires, records, or can
   require a human.
 - The approval store is an unauthenticated JSON file; anything that can write
@@ -149,4 +147,5 @@ replay, and failure — each with a correlation ID and a run ID.
 - The audit log is append-only by convention, not tamper-evident, and the
   enterprise API keeps no audit of its own.
 - Hermes's own `tools.include` enforcement against a model is unproven here.
-- The GitHub Actions workflow has never executed; the repository has no remote.
+- At the time of this decision, the GitHub Actions workflow had not run because
+  the repository had no remote. The public repository now runs CI.

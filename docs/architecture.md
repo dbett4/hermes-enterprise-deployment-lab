@@ -33,16 +33,16 @@ flowchart LR
 | `enterprise-mcp` | FastMCP stdio server; tool surface chosen by an allowlist | Local process (no port) |
 | **Hermes Agent** | External operator that discovers MCP tools via isolated `HERMES_HOME` | **Not** a Compose service |
 
-## Proof layers
+## What each check covers
 
-| Layer | Command | What it proves | What it does not |
+| Check | Command | Covers | Does not cover |
 |---|---|---|---|
 | Full arc | `./scripts/demo.sh` | Scoped discovery, caller/operator separation, forced failure, resume, terminal capability, exactly-once, audit | No model is involved; the script automates the operator command with a fixture identity |
 | FastMCP protocol | `./scripts/mcp-smoke.sh` | Tool list/inspect/call **with real credential injection**, plus a wrong-token negative control | Not a Hermes-side proof |
 | Hermes discovery | `./scripts/hermes-mcp-proof.sh` | The real `hermes` CLI connects over stdio and lists the tools | No invocation, no LLM |
 | Hermes scoping | `./scripts/hermes-tool-filter-proof.sh` | Hermes discovers 4 tools vs 1 depending on the server allowlist | Not Hermes's own `tools.include` enforcement |
 | Workflow seam | `./scripts/smoke.sh` | Containerized workflow-runner produces a guarded receipt | Read/plan path only |
-| Fresh clone | `./scripts/fresh-clone-check.sh` | A clean clone of HEAD installs, passes `pytest`, and passes `scripts/demo.sh` | Not a CI run; it does **not** re-run the Hermes, smoke, or container proofs |
+| Fresh clone | `./scripts/fresh-clone-check.sh` | A clean clone of HEAD installs, passes `pytest`, and passes `scripts/demo.sh`; GitHub Actions runs this as a separate job | It does **not** re-run the Hermes, smoke, or container checks |
 
 ## MCP tool surface
 
@@ -57,11 +57,12 @@ The surface is chosen by `ENTERPRISE_MCP_ENABLED_TOOLS` and applied **before**
 registration, so an excluded tool is absent from `list_tools` and not callable.
 The default is read/plan only.
 
-Hermes prefixes MCP tool names as `mcp__<server>__<tool>` for the model-facing
-toolset, but `hermes mcp test` prints bare names. Receipts here record the bare
-names as observed and flag the prefixed form as asserted, not observed.
+Hermes prefixes MCP tool names as `mcp__<server>__<tool>` in the model-facing
+toolset, but `hermes mcp test` prints bare names. Local receipts therefore store
+the bare names printed by the CLI and label the prefixed form as expected rather
+than observed.
 
-## Threat boundary
+## Security model
 
 - **In scope:** two local fixture token scopes via environment, deterministic
   incident data, structured logs, correlation IDs, an in-lab mutation target,
@@ -85,9 +86,9 @@ Two static bearer scopes:
 Missing credentials return `401`, wrong scope returns `403`. The MCP server has
 **no default token** and exits 2 without one.
 
-## Separated operator approval
+## Write approval
 
-Enforced at runtime, not merely represented in a receipt.
+The write gate is executable code, not a flag in a response:
 
 ```
 apply_incident_plan(incident, action)                  -> pending_approval + opaque ID, NO write
@@ -98,7 +99,7 @@ apply_incident_plan(incident, action, capability)     -> write dispatched once
 apply_incident_plan(incident, action, applied_cap)    -> approval_rejected, NO write
 ```
 
-**What is enforced:** the MCP caller can request approval but cannot grant it.
+The MCP caller can request approval but cannot grant it.
 The request response exposes only an opaque `approval_id`, never the capability
 or idempotency key. A distinct operator command records the supplied approver
 identity and yields a capability once; only its SHA-256 hash is stored. Validation
@@ -106,14 +107,14 @@ requires `approved` state, exact incident/action binding, and an unexpired grant
 `applied` and `expired` are terminal. Tests assert "no write was sent" against
 observed HTTP traffic rather than the response's own claim.
 
-**What is not enforced:** the lab does not authenticate the identity string
+The lab does not authenticate the identity string
 passed to `--approver`, protect the local JSON store from another local writer,
 or provide a production policy service. The demo automates both caller and
 operator roles for reproducibility, while exercising them through different
 surfaces and processes. This proves structural separation, not human judgment.
 
-Boundary: this is a workflow-layer control. It is not a Hermes policy control and
-not an API-side authorization rule.
+This is a workflow-runner control. It is neither a Hermes policy nor an API-side
+authorization rule.
 
 State machine:
 
@@ -150,7 +151,7 @@ resume reuses it automatically.
 The MCP server reads its fault switch from `ENTERPRISE_INJECT_FAILURE`, so faults
 are configuration rather than a tool argument an agent could set.
 
-## Correlation, audit, and observability
+## Logs and correlation IDs
 
 - **Run-level** `correlation_id` on every tool payload and receipt; updated when
   the API returns `X-Correlation-ID`.
@@ -165,15 +166,14 @@ are configuration rather than a tool argument an agent could set.
 
 ## Limitations
 
-A customer-shaped lab, not a customer deployment. The approval and audit stores
-are local files sized for a single operator.
+A local lab is not a customer deployment. The approval and audit stores are
+files intended for one operator.
 
-**No model has ever chosen or invoked any of these tools, and none will.** Every
-call in this repository comes from a script or a test. A model-driven run would
-require provider spend, which the owner declined on 2026-08-01. This is a
-permanent ceiling on what the repository can demonstrate, not an open task. What
-a real Hermes build did do is discover and enumerate the tool surface over stdio
-(`scripts/hermes-mcp-proof.sh`, `scripts/hermes-tool-filter-proof.sh`).
+Every tool call in this repository comes from a script or test. A model-driven
+run would require provider spend, which I declined on 2026-08-01. A real Hermes
+build does connect over stdio and enumerate the tools
+(`scripts/hermes-mcp-proof.sh`, `scripts/hermes-tool-filter-proof.sh`), but it
+does not choose or call them.
 
 The operator identity is a caller-supplied fixture string, not an authenticated
 principal. The approval store is a local JSON file and is not safe for concurrent

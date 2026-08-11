@@ -1,6 +1,6 @@
-# Operator Runbook
+# Running and troubleshooting the lab
 
-## Quick commands
+## Start here
 
 No containers needed for the main arc:
 
@@ -36,18 +36,18 @@ must be healthy.
 
 | Command | Purpose |
 |---|---|
-| `./scripts/demo.sh` | The full arc, self-contained; boots its own API unless `ENTERPRISE_API_URL` is healthy |
+| `./scripts/demo.sh` | Full flow; starts its own API unless `ENTERPRISE_API_URL` is already healthy |
 | `./scripts/smoke.sh` | Containerized workflow-runner receipt |
-| `./scripts/mcp-smoke.sh` | FastMCP protocol proof (explicit credentials + negative control) plus Hermes discovery |
-| `MCP_SMOKE_PROTOCOL_ONLY=1 ./scripts/mcp-smoke.sh` | Protocol proof only (CI, no Hermes CLI) |
-| `./scripts/hermes-mcp-proof.sh` | Isolated Hermes discovery receipt |
-| `./scripts/hermes-tool-filter-proof.sh` | Differential scope proof: Hermes sees 4 tools vs 1 |
+| `./scripts/mcp-smoke.sh` | FastMCP protocol check (explicit credentials plus a wrong-token check) and Hermes discovery |
+| `MCP_SMOKE_PROTOCOL_ONLY=1 ./scripts/mcp-smoke.sh` | Protocol check only (CI, no Hermes CLI) |
+| `./scripts/hermes-mcp-proof.sh` | Check Hermes discovery in an isolated home directory |
+| `./scripts/hermes-tool-filter-proof.sh` | Change the server allowlist and show Hermes seeing 4 tools, then 1 |
 | `./scripts/fresh-clone-check.sh` | Clone HEAD to a temp dir, fresh venv, full suite + demo |
 | `./scripts/record-demo.sh` | asciinema cast if available, otherwise a text transcript + a recording plan |
 | `./scripts/emit-hermes-mcp-config.sh <root> [tools]` | Emit Hermes config with absolute paths and a server-side allowlist |
 
 `fastmcp inspect` is fine for a capability summary. Do **not** use the fastmcp
-CLI's command-spawning subcommands to prove credential handling: they cannot pass
+CLI's command-spawning subcommands to test credential handling: they cannot pass
 `env` to the server, and MCP stdio forwards only
 `HOME`, `LOGNAME`, `PATH`, `SHELL`, `USER`. That is exactly how this repo once
 "proved" credentials that were never delivered — see ADR 004.

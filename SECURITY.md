@@ -1,10 +1,10 @@
-# Security Policy
+# Security notes
 
 ## Scope
 
-This repository is a **fixture lab** for demonstrating Hermes Agent integration
-with a mock enterprise API. It is not a production deployment, does not contain
-real customer data, and must not be used with production credentials.
+This repository connects Hermes tooling to a mock enterprise API. It is a local
+lab, not a production deployment. It contains no customer data and must not be
+used with production credentials.
 
 ## Reporting vulnerabilities
 
@@ -25,16 +25,16 @@ Never commit, paste, or include in issues or receipts:
 The lab uses fixture tokens (`lab-read-token`, `lab-write-token`) documented in
 `.env.example`. Treat them as non-secret test data only.
 
-## Credential handling — corrected 2026-08-01
+## How credentials reach the MCP process
 
-An earlier version of this file claimed the token was "resolved from the operator
-environment at connect time". That was **false for the FastMCP client path**.
+An earlier version said the token was "resolved from the operator environment at
+connect time." That was wrong for the FastMCP client path.
 MCP stdio forwards only an allowlisted set of variables
 (`HOME`, `LOGNAME`, `PATH`, `SHELL`, `USER`), so `ENTERPRISE_API_TOKEN` never
 reached the server process, and the server fell back to a hardcoded default. A
 smoke run with a deliberately wrong token still succeeded.
 
-What is true now:
+The current behavior is:
 
 - `enterprise_mcp.config.load_settings()` has **no default token**. A missing
   `ENTERPRISE_API_TOKEN` raises and the server exits 2 before serving.
@@ -43,7 +43,7 @@ What is true now:
   Hermes does this through the `env:` block in its MCP server config, which
   supports `${VAR}` interpolation — verified on 2026-08-01 by inspecting the
   environment observed inside the spawned subprocess.
-- The protocol smoke includes a **negative control**: a wrong token must produce
+- The protocol smoke includes a negative check: a wrong token must produce
   an `auth_failure` receipt. The previous smoke was structurally unable to fail
   that assertion.
 
@@ -60,7 +60,7 @@ A read-scope token presented to the mutating endpoint returns `403`. If no write
 token is configured, `apply_incident_plan` cannot mutate and says so in its
 response (`credential_scope: read_token_only`).
 
-## Separated operator approval
+## Write approval
 
 `apply_incident_plan` is the only mutating tool, and it is guarded at runtime:
 
@@ -77,13 +77,12 @@ response (`credential_scope: read_token_only`).
 - Confirmed apply/replay makes the approval terminal; further presentation is
   refused before dispatch.
 
-**This is structural separation, not production identity assurance.** The MCP
-caller cannot approve its own request through the tool surface, but the lab does
-not authenticate the identity string supplied to the operator command. The demo
-automates both roles with a fixture identity so it remains deterministic; it does
-not prove a real person's identity or judgment.
+The MCP caller cannot approve its own request through the tool surface. The lab,
+however, does not authenticate the identity passed to the operator command. The
+demo uses a fixture identity for both roles so the run is deterministic; that is
+not proof of a person's identity or judgment.
 
-Further limits worth stating plainly:
+The remaining weaknesses are straightforward:
 
 - The guard lives in the workflow layer. It is not a Hermes policy control and
   not an API-side authorization rule. A different client holding the write token
@@ -93,7 +92,7 @@ Further limits worth stating plainly:
   opaque request ID at `APPROVAL_STORE_PATH`, with no signature or ownership
   check. Hashing the capability prevents plaintext recovery from the file; it
   does not protect the state from a local writer. Trusted-filesystem-only.
-- **Approval lifecycle is local.** `pending`, `approved`, `applied`, and
+- Approval lifecycle is local. `pending`, `approved`, `applied`, and
   `expired` are enforced, but by a JSON file and an in-process lock rather than a
   transactional authorization service.
 - **Deduplication is per approval, not per action.** Two approvals for the same
@@ -132,6 +131,6 @@ OIDC, Kubernetes hardening, production secret management, multi-process-safe
 approval storage, authenticated approval identity, independent human judgment,
 and any real external mutation.
 
-No LLM has ever invoked these tools and none will: a model-driven run requires
-provider spend that was declined on 2026-08-01. Every call in this repository is
-made by a script or a test. Hermes's role here is discovery and enumeration only.
+No LLM invokes these tools in this repository. A model-driven run requires
+provider spend, which I declined on 2026-08-01. Scripts and tests make every
+call; Hermes is used for discovery and enumeration only.

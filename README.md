@@ -1,24 +1,20 @@
 # Hermes Enterprise Deployment Lab
 
-An MCP surface that a real Hermes Agent build discovers and enumerates, with
-enforced tool scoping, fail-closed credential handling, separated operator
-approval, and exactly-once resume proven after a forced failure. Locally, in a
-customer-shaped lab: a mock enterprise API, a workflow seam, a FastMCP stdio
-server, and an operator-only approval command.
+I built this small deployment lab to work through the failure cases that matter
+when an agent can touch an internal system. It includes a mock enterprise API,
+a FastMCP stdio server, a workflow runner, and a separate operator command for
+approvals.
 
-That is the whole claim. Two things it is specifically **not**:
+A real Hermes CLI build connects to the server and lists its tools. The server
+decides which tools are available, refuses to start without credentials, and
+keeps the write path separate from the approval path. The demo then forces an
+error after the API has committed a write and shows that resuming creates no
+duplicate.
 
-- **The approval identity is a lab assertion, not enterprise authentication.**
-  The MCP caller gets only an opaque approval ID. A separate command records an
-  operator identity and releases a time-bound capability whose plaintext is
-  never stored. The demo automates that operator role with a fixture identity;
-  it does not prove a real person's identity or judgment.
-- **No model has ever invoked these tools, and none will.** Every call here comes
-  from a script or a test. Hermes's real involvement is discovery and
-  enumeration, which is proven; model-driven invocation is not, and it is not
-  coming.
-
-Both are expanded in [What this does not prove](#what-this-does-not-prove).
+There are two important limits. Hermes only performs discovery here; scripts
+and tests make every tool call. The approval command records an identity string
+but does not authenticate the person behind it. See [Limits](#limits) for the
+full list.
 
 Run the whole thing in one command:
 
@@ -26,20 +22,15 @@ Run the whole thing in one command:
 ./scripts/demo.sh
 ```
 
-Run the complete credential-free proof packet with `./scripts/proof.sh`. It
-runs all 73 tests, inspects the MCP server, parses the Compose topology, and
-executes the failure/resume demo. See [PROOF.md](PROOF.md) for exact claim
-boundaries.
+`./scripts/proof.sh` runs all 73 tests, inspects the MCP server, parses the
+Compose file, and exercises the failure/resume path. The same test suite and a
+fresh-clone check run in [GitHub Actions](https://github.com/dbett4/hermes-enterprise-deployment-lab/actions).
+No provider credentials are needed. [PROOF.md](PROOF.md) lists the check behind
+each claim.
 
-> Status: **local proof only — no CI run, no independent second-operator
-> validation, no model invocation, no production identity provider.** See
-> [What this does not prove](#what-this-does-not-prove) — it is deliberately
-> specific, and it is the part worth reading first.
+## What you can check
 
-## What this proves
-
-Each row names the command that establishes it. If a row has no command, it does
-not belong in this table.
+You can rerun each result below:
 
 | Claim | Established by |
 |---|---|
@@ -57,61 +48,42 @@ not belong in this table.
 | The workflow runner's audit log records request, named operator grant, capability acceptance, failure, and replay | `pytest workflow-runner/tests/test_audit.py`, demo STEP 10. The log is not tamper-evident |
 | A clean clone of HEAD reproduces the test suite and the demo | `./scripts/fresh-clone-check.sh` — it runs `pytest` and `scripts/demo.sh` only; it does **not** re-run the Hermes or container proofs |
 
-**Hermes Agent is an external operator/client**, not a Compose service. Proofs use
-an isolated `HERMES_HOME`; they never read or write your live `~/.hermes/config.yaml`.
-Hermes's role in this repository is discovery and enumeration. It never invokes a
-tool here, and no output in this repository was produced by Hermes acting on its
-own — the callers are `scripts/*.sh` and `pytest`.
+Hermes is an external client, not a Compose service. The discovery scripts use
+an isolated `HERMES_HOME` and never touch `~/.hermes/config.yaml`. Hermes lists
+the tools; `scripts/*.sh` and `pytest` call them.
 
-## What this does not prove
+## Limits
 
-- **No LLM has ever chosen or invoked these tools, and none will.** Every tool
-  call in this repository is made by a script or a test. `hermes mcp test`
-  performs discovery only; it makes no provider call. Closing this would need a
-  model-driven run (`hermes -z` with the toolset narrowed to `enterprise_ops`)
-  plus the session transcript showing the tool-call event. **The owner declined
-  that provider spend on 2026-08-01, so it will not be done.** Treat this as a
-  permanent ceiling on the repository, not an open task. What Hermes really did
-  here — and all it did — is discover and enumerate the tool surface over stdio.
-  Nothing in this repository was "run by Hermes" in any other sense.
-- **The demo does not prove human identity or judgment.** The role boundary is
-  real in code: the MCP surface cannot grant approval, and its request response
-  contains no capability. The demo then invokes the separate operator command
-  with `demo-operator@example.com` so the entire arc remains deterministic. In a
-  real deployment that command must sit behind authenticated operator access.
-- **The approval store is an unauthenticated JSON file.** Anything that can
-  write `APPROVAL_STORE_PATH` can still subvert the lab control. The store keeps
-  only a SHA-256 capability hash, but it is not a transactional or authenticated
-  production authorization service.
-- **The audit log is append-only by convention, not tamper-evident.** It is a
-  plain `.jsonl` file with no signature or chain hash; `run_started` and
-  `run_finished` carry a null correlation ID; and the enterprise API writes no
-  audit of its own, so a direct write to the API leaves no trace in it.
-- **"Exactly once" is per approval, not per action.** Two approvals for the same
-  `action_id` carry two idempotency keys and produce two records. Nothing
-  deduplicates at the action level.
-- **Hermes-side tool filtering is not proven.** Hermes has a `tools.include`
-  list, and on 2026-08-01 narrowing it to a single entry still made
-  `hermes mcp test` print all three tools, because that command reports the
-  server's advertised surface. The scoping proven here is enforced by *this
-  server*, not by Hermes.
-- **CI has never run.** There is no git remote for this repository, so
-  `.github/workflows/ci.yml` has never executed. The fresh-clone half is proven
-  locally by `scripts/fresh-clone-check.sh`; the green-badge half is not.
-- **No second operator has validated any of this, and none is scheduled.**
-  [`docs/second-operator-protocol.md`](docs/second-operator-protocol.md) is an
-  **unrun** protocol — a script nobody has executed — not pending evidence. Its
-  results table is blank because the run has never happened.
-- **The guard is a workflow-layer control, not a platform one.** A different
-  client holding the write token could call the enterprise API directly and
-  bypass it entirely, leaving no audit record.
-- **Not a production deployment.** No OIDC, no Kubernetes, no real identity
-  provider, no cloud/hybrid scale, no real customer data. One deterministic
-  incident fixture (`INC-2026-0042`). The "mutation" is a record in an in-memory
-  store inside the lab API.
-- **Docker is unverified.** Podman is the supported container runtime here.
+- `hermes mcp test` only discovers tools. It makes no provider call. A true
+  model-driven run would require `hermes -z`, a tool-call transcript, and
+  provider spend. I declined that spend on 2026-08-01, so this repository does
+  not claim model-driven invocation.
+- The demo calls the operator command with `demo-operator@example.com`. The MCP
+  server cannot grant its own approval, but the lab does not authenticate that
+  identity or prove human judgment. A real deployment would put this command
+  behind authenticated operator access.
+- `APPROVAL_STORE_PATH` is an unauthenticated JSON file. It stores only a SHA-256
+  hash of the capability, but any local process that can edit the file can
+  bypass the control. It is not a transactional authorization service.
+- The `.jsonl` audit log has no signature, chain hash, or WORM storage.
+  `run_started` and `run_finished` have a null correlation ID. The API has no
+  audit log of its own, so direct API writes do not appear here.
+- Deduplication is per approval, not per action. Two approvals for the same
+  `action_id` have different idempotency keys and create two records.
+- The server's allowlist is tested. Hermes's own `tools.include` behavior is
+  not. On 2026-08-01, narrowing that list still made `hermes mcp test` print all
+  three server-advertised tools.
+- No second operator has run the validation steps. The blank
+  [second-operator protocol](docs/second-operator-protocol.md) is a checklist,
+  not a result, and nobody is scheduled to run it.
+- The approval guard lives in the workflow runner. A client with the write token
+  can bypass it and call the fixture API directly, with no audit entry.
+- This is not a production deployment: no OIDC, Kubernetes, real identity
+  provider, cloud/hybrid scaling, or customer data. It has one deterministic
+  incident (`INC-2026-0042`), and a "write" adds a record to an in-memory store.
+- Podman is tested; Docker is not.
 
-## The arc
+## How it works
 
 ```
 Hermes / script ──stdio──► enterprise-mcp ──Bearer+Idempotency-Key──► enterprise-api
@@ -123,20 +95,20 @@ Hermes / script ──stdio──► enterprise-mcp ──Bearer+Idempotency-Key
         └─ one-time capability (plaintext never persisted)
 ```
 
-1. **Scoped discovery** — the default allowlist exposes read/plan tools only.
-2. **Read + plan** — `propose_incident_plan` returns runbook steps with stable
+1. **Choose the surface.** The default allowlist exposes read/plan tools only.
+2. **Read and plan.** `propose_incident_plan` returns runbook steps with stable
    `action_id`s and `approval_required` flags.
-3. **Request blocked** — `apply_incident_plan` without a capability writes
+3. **Stop the first write.** `apply_incident_plan` without a capability writes
    nothing and returns only `pending_approval` plus an opaque `approval_id`.
-4. **Operator grant** — `python -m workflow_runner.approval_operator approve
+4. **Get an operator grant.** `python -m workflow_runner.approval_operator approve
    <approval_id> --approver <identity>` records the approver and returns the
    expiring capability once; only its hash is persisted.
-5. **Forced failure** — with `ENTERPRISE_INJECT_FAILURE=error_after_commit` the
+5. **Force the awkward failure.** With `ENTERPRISE_INJECT_FAILURE=error_after_commit`, the
    API commits the record and *then* returns 500. The caller sees `upstream_5xx`
    and resume instructions.
-6. **Resume** — the same capability replays the same idempotency key; the API
+6. **Resume.** The same capability reuses the idempotency key; the API
    returns the original record with `replayed: true`.
-7. **Exactly once + terminal** — the store holds one record and another use of
+7. **Check the result.** The store holds one record and another use of
    the applied capability is rejected without dispatch.
 
 ## Fresh-clone setup
@@ -147,7 +119,7 @@ Podman and the Hermes CLI are optional and only needed for the container and
 Hermes proofs.
 
 ```bash
-git clone <repo-url> hermes-enterprise-deployment-lab
+git clone https://github.com/dbett4/hermes-enterprise-deployment-lab
 cd hermes-enterprise-deployment-lab
 cp .env.example .env
 
@@ -160,7 +132,7 @@ python3 -m venv .venv
 ./scripts/demo.sh          # the whole arc; boots its own API, no containers needed
 ```
 
-Container and Hermes proofs:
+Optional container and Hermes checks:
 
 ```bash
 podman machine start                 # once, if the default machine is stopped
@@ -180,7 +152,7 @@ compose providers report that as a failure under `--wait`.
 MCP_SMOKE_PROTOCOL_ONLY=1 ./scripts/mcp-smoke.sh
 ```
 
-Runs the FastMCP inspect/list/call proof without the Hermes CLI. Full local smoke
+Runs the FastMCP inspect/list/call checks without the Hermes CLI. Full local smoke
 **requires** Hermes and fails closed when it is absent.
 
 ## Configuration
@@ -236,53 +208,52 @@ ENTERPRISE_API_WRITE_TOKEN=lab-write-token
 | `propose_incident_plan` | no | Plan receipt; consequential steps carry `approval_required` and an `action_id` |
 | `apply_incident_plan` | **yes** | Requests or consumes a separately granted, expiring capability; idempotent execution of one runbook step. Opt-in via the allowlist |
 
-## Documentation
+## More detail
 
 | Document | Contents |
 |---|---|
-| [`docs/architecture.md`](docs/architecture.md) | Components, proof layers, threat boundary |
+| [`docs/architecture.md`](docs/architecture.md) | Components, checks, and security model |
 | [`docs/runbook.md`](docs/runbook.md) | Operator commands and troubleshooting |
 | [`docs/adr/003-stdio-mcp-read-plan-tools.md`](docs/adr/003-stdio-mcp-read-plan-tools.md) | Why stdio MCP |
 | [`docs/adr/004-enforced-approval-idempotency-and-scoped-tools.md`](docs/adr/004-enforced-approval-idempotency-and-scoped-tools.md) | Historical two-call guard and credential/scoping decision |
 | [`docs/adr/005-separated-operator-approval.md`](docs/adr/005-separated-operator-approval.md) | Superseding separated approval state machine and resume semantics |
-| [`docs/second-operator-protocol.md`](docs/second-operator-protocol.md) | **Unrun** protocol — a script for a validator who does not exist yet, not pending evidence |
-| [`docs/build-spec.md`](docs/build-spec.md) | Controlling spec |
+| [`docs/second-operator-protocol.md`](docs/second-operator-protocol.md) | A validation checklist that has not been run |
+| [`docs/build-spec.md`](docs/build-spec.md) | Original target and shipped status |
 
-## Milestones
+## Build status
 
 | Milestone | Status |
 |---|---|
-| M1 Green local deployment | Green |
+| M1 Local deployment | Complete |
 | M2 Identity/integration boundary | **Partial** — two static bearer scopes; no OIDC, no connector pagination/retry |
-| M3 Agent workflow (MCP + Hermes discovery) | **Partial, permanently** — discovery and scoping proven with the real Hermes CLI; model-driven invocation will not be attempted (provider spend declined 2026-08-01) |
-| M4 Separated approval, idempotency, resume, audit | **Partial** — role separation, expiry, terminal consumption, and ambiguous-failure resume are green locally. Identity is a caller-supplied fixture string and the audit is not tamper-evident |
-| M5 CI green from a fresh clone | **Red** — no remote; the workflow has never run |
+| M3 Agent workflow (MCP + Hermes discovery) | **Partial by design** — the real Hermes CLI discovers the scoped surface; no model-driven invocation (provider spend declined 2026-08-01) |
+| M4 Separated approval, idempotency, resume, audit | **Partial** — role separation, expiry, terminal use, and ambiguous-failure resume work. Identity is supplied by the caller and the audit is not tamper-evident |
+| M5 CI from a fresh clone | **Complete** — tests and fresh-clone job pass in GitHub Actions |
 
-## Known limitations and roadmap
+## Work not done
 
-Everything here is a deliberate, recorded gap. Nothing in this list is in
-progress.
+Nothing in this table is currently in progress.
 
 | Item | State | Note |
 |---|---|---|
 | Production approval identity/policy integration | Not implemented | The operator command records a supplied identity but does not authenticate it. |
 | Model-driven tool invocation | **Declined, 2026-08-01** | Provider spend declined. Permanent; this repository will never demonstrate it. |
 | Second-operator validation | **Unrun** | `docs/second-operator-protocol.md` is a script nobody has executed. |
-| CI run | **Never executed** | No git remote exists. |
+| CI run | Complete | Tests and the separate fresh-clone job pass in GitHub Actions. |
 | Action-level deduplication | Not implemented | "Exactly once" is per approval, not per action. |
 | Approval consumption and expiry | Implemented locally | `pending → approved → applied` or `expired`; applied/expired are terminal. |
 | Authenticated approval store | Not implemented | Plain JSON at `APPROVAL_STORE_PATH`; capability plaintext is not persisted. |
 | Enterprise-API-side audit | Not implemented | A direct write to the API leaves no trace. |
 
-### Approval boundary that remains
+### What production approval would require
 
-The local implementation now returns only an opaque request ID, grants through
-a distinct operator command, records the supplied identity, hashes the stored
-capability, enforces expiry/binding/terminal state, and preserves safe resume
-after a post-commit ambiguity. It still does **not** authenticate that identity
-or protect the JSON store from a local writer. Productionizing it would replace
-the operator command and file store with an IdP-backed approval service and a
-transactional audit store. Full text: [`docs/architecture.md`](docs/architecture.md).
+The local implementation returns an opaque request ID, grants through a
+different command, records the supplied identity, stores a capability hash,
+enforces expiry and binding, and safely resumes after an ambiguous commit. It
+does not authenticate that identity or protect the JSON file from a local
+writer. A production version would replace the command and file with an
+IdP-backed approval service and transactional audit store. Details are in
+[`docs/architecture.md`](docs/architecture.md).
 
 ## License
 
