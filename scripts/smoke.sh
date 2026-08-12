@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Read/plan smoke against an already-running Compose enterprise-api.
+# Prefer docker compose, else podman compose (same selection class as container-proof).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -6,6 +8,16 @@ cd "$ROOT_DIR"
 
 if [[ ! -f .env ]]; then
   cp .env.example .env
+fi
+
+COMPOSE_CMD=()
+if docker compose version >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  COMPOSE_CMD=(docker compose)
+elif command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+  COMPOSE_CMD=(podman compose)
+else
+  echo "SMOKE_FAIL: no usable docker/podman compose engine" >&2
+  exit 2
 fi
 
 RECEIPT_HOST_DIR="${RECEIPT_HOST_DIR:-$ROOT_DIR/.smoke-receipts}"
@@ -19,8 +31,8 @@ echo "==> Checking enterprise-api health"
 curl -fsS "http://localhost:8080/healthz" >/dev/null
 curl -fsS "http://localhost:8080/readyz" >/dev/null
 
-echo "==> Running workflow-runner incident intake"
-podman compose run --rm --no-deps \
+echo "==> Running workflow-runner incident intake via ${COMPOSE_CMD[*]}"
+"${COMPOSE_CMD[@]}" run --rm --no-deps \
   -v "$RECEIPT_HOST_DIR:/receipts:rw" \
   workflow-runner \
   --incident-id "${DEFAULT_INCIDENT_ID:-INC-2026-0042}" \

@@ -11,10 +11,13 @@ from enterprise_mcp.server import mcp
 from workflow_runner.errors import WorkflowErrorCode
 
 
+MCP_CORRELATION_ID = "6f3d3aa8-9e70-4fc6-b6f4-2cba8adbc377"
+
+
 def _json_response(
     status_code: int,
     payload: dict[str, Any] | str,
-    correlation_id: str = "mcp-corr-1",
+    correlation_id: str = MCP_CORRELATION_ID,
 ) -> httpx.Response:
     if isinstance(payload, dict):
         content = json.dumps(payload).encode()
@@ -132,7 +135,7 @@ async def test_get_incident_context_success(mcp_transport: FastMCPTransport) -> 
     assert payload["incident"]["incident_id"] == "INC-2026-0042"
     assert payload["runbook"]["runbook_id"] == "RB-PAY-GATEWAY-01"
     assert len(payload["dependency_calls"]) == 2
-    assert payload["correlation_id"] == "mcp-corr-1"
+    assert payload["correlation_id"] == MCP_CORRELATION_ID
 
 
 @pytest.mark.asyncio

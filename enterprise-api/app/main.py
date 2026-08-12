@@ -13,7 +13,9 @@ from app.auth import require_read_token, require_write_token
 from app.config import settings
 from app.fixtures import INCIDENTS, RUNBOOKS
 from app.middleware import CorrelationAndLoggingMiddleware
+from app.metrics import observe_action_outcome, render_metrics
 from app.store import ACTION_STORE
+from app.tracing import configure_tracing, shutdown_tracing
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -28,9 +30,11 @@ INJECT_MODES = {"error", "error_after_commit", "timeout"}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _ready
+    configure_tracing()
     _ready = True
     yield
     _ready = False
+    shutdown_tracing()
 
 
 app = FastAPI(title="Enterprise Operations API", version="0.2.0", lifespan=lifespan)
@@ -67,6 +71,12 @@ async def readyz() -> dict[str, str]:
     if not _ready:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="not ready")
     return {"status": "ready"}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics() -> Response:
+    payload, content_type = render_metrics()
+    return Response(content=payload, media_type=content_type)
 
 
 @app.get("/v1/incidents/{incident_id}")
@@ -140,6 +150,7 @@ async def apply_incident_action(
 
     # Post-commit fault: the side effect exists but the caller sees a 5xx.
     if mode == "error_after_commit":
+        observe_action_outcome("postcommit_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Injected upstream failure after commit",
@@ -147,6 +158,9 @@ async def apply_incident_action(
 
     if not created:
         response.status_code = status.HTTP_200_OK
+        observe_action_outcome("replayed")
+    else:
+        observe_action_outcome("created")
 
     return {
         "incident_id": incident_id,

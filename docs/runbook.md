@@ -10,15 +10,28 @@ cp .env.example .env
 ./scripts/demo.sh
 ```
 
-With containers and Hermes:
+Self-contained container proof (optional; needs a usable Docker or Podman engine):
 
 ```bash
-podman machine start                 # if the default machine is stopped
-podman compose up -d --build
-./scripts/smoke.sh
-ENTERPRISE_API_URL=http://127.0.0.1:8080 ./scripts/mcp-smoke.sh
-ENTERPRISE_API_URL=http://127.0.0.1:8080 ./scripts/hermes-tool-filter-proof.sh
-podman compose down -v
+bash ./scripts/container-proof.sh     # prefers docker compose, else podman compose
+python3 -m json.tool .container-proof/receipt.json
+```
+
+This proof picks free loopback ports, runs its own isolated Compose project, and
+**must tear that project down before it can pass**. It does not leave services
+listening on 8080, and a pass is attested only by `.container-proof/receipt.json`
+(or a successful CI `container-proof` job that produced one). Do not point Hermes
+or MCP smokes at 8080 afterward and expect that stack to still be up.
+
+Manual Compose + Hermes workflow (separate; you keep the stack running):
+
+```bash
+# podman machine start   # if using Podman
+podman compose up -d --build          # or: docker compose up -d --build
+# optional older smoke path:
+# ./scripts/smoke.sh
+ENTERPRISE_API_URL=http://127.0.0.1:${ENTERPRISE_API_PORT:-8080} ./scripts/mcp-smoke.sh
+ENTERPRISE_API_URL=http://127.0.0.1:${ENTERPRISE_API_PORT:-8080} ./scripts/hermes-tool-filter-proof.sh
 ```
 
 `workflow-runner` runs to completion and exits 0 by design. Some compose
@@ -31,18 +44,23 @@ must be healthy.
 |---|---|
 | `GET /healthz` | Process is alive |
 | `GET /readyz` | Service finished startup and can serve traffic |
+| `GET /metrics` | Intentionally unauthenticated Prometheus exposition; request and action-outcome series. Compose publishes the API on loopback only |
 
 ## Scripts
 
 | Command | Purpose |
 |---|---|
-| `./scripts/demo.sh` | Full flow; starts its own API unless `ENTERPRISE_API_URL` is already healthy |
+| `./scripts/demo.sh` | Full flow; starts its own API only when `ENTERPRISE_API_URL` is unset. An explicit URL must be loopback and healthy or the demo fails closed |
+| `./scripts/telemetry-proof.sh` | Checksum-verified native Prometheus: rule tests, live scrape/query, receipt, cleanup; no containers |
+| `./scripts/trace-proof.sh` | Loopback OTLP/HTTP capture of W3C CLIENT/SERVER spans and bounded approval/failure/resume events; receipt under `.trace-proof/` |
+| `bash ./scripts/container-proof.sh` | Isolated Compose API + Prometheus proof (dynamic ports, required teardown); writes `.container-proof/receipt.json` on pass |
+| `./scripts/proof.sh` | Canonical local proof (pytest, inspect, compose parse, demo, native telemetry, native traces). Opt in to containers with `PROOF_WITH_CONTAINERS=1` or `--with-containers` |
 | `./scripts/smoke.sh` | Containerized workflow-runner receipt |
 | `./scripts/mcp-smoke.sh` | FastMCP protocol check (explicit credentials plus a wrong-token check) and Hermes discovery |
 | `MCP_SMOKE_PROTOCOL_ONLY=1 ./scripts/mcp-smoke.sh` | Protocol check only (CI, no Hermes CLI) |
 | `./scripts/hermes-mcp-proof.sh` | Check Hermes discovery in an isolated home directory |
 | `./scripts/hermes-tool-filter-proof.sh` | Change the server allowlist and show Hermes seeing 4 tools, then 1 |
-| `./scripts/fresh-clone-check.sh` | Clone HEAD to a temp dir, fresh venv, full suite + demo |
+| `./scripts/fresh-clone-check.sh` | Clone HEAD to a temp dir, fresh venv, full suite + demo; does not run native telemetry, trace, Hermes, smoke, or container checks |
 | `./scripts/record-demo.sh` | asciinema cast if available, otherwise a text transcript + a recording plan |
 | `./scripts/emit-hermes-mcp-config.sh <root> [tools]` | Emit Hermes config with absolute paths and a server-side allowlist |
 
@@ -70,6 +88,50 @@ the `mcp__enterprise_ops__*` prefixed form, so do not expect it in the output.
 
 `hermes mcp test` proves discovery only: no LLM, no provider call, no invocation.
 
+## Telemetry alerts
+
+The API exports route-template request counters/latency histograms and mutation
+outcomes. Prometheus evaluates these operator-facing rules:
+
+| Alert | Meaning | First response |
+|---|---|---|
+| `EnterpriseApiAvailabilityFastBurn` | 99% availability budget burning rapidly across 1h and 5m windows | Check target health and recent API 5xx logs; stop automated retries until the failure mode is known |
+| `EnterpriseApiAvailabilitySlowBurn` | Sustained availability burn across 6h and 30m windows | Open a tracked investigation and compare error classes with expected fixture traffic |
+| `EnterpriseApiLatencyFastBurn` | More than the allowed share of requests exceed 500 ms across 1h and 5m windows | Check API saturation and injected timeout settings; contain traffic before retrying writes |
+| `EnterpriseApiLatencySlowBurn` | Sustained latency-budget burn across 6h and 30m windows | Review route-level latency and create a capacity/performance ticket |
+| `EnterpriseApiPostCommitFailure` | A mutation committed and then returned 5xx | **Do not mint a new key.** Resume with the same approval capability and idempotency key, then confirm `replayed` and one record |
+
+Validate the complete local telemetry path with:
+
+```bash
+PYTHON_BIN="$PWD/.venv/bin/python" ./scripts/telemetry-proof.sh
+python3 -m json.tool .telemetry-proof/receipt.json
+```
+
+The proof must report target `up`, five loaded alerts, positive firing fixtures
+for all five, the idle-latency negative control, and `created`, `replayed`, and
+`postcommit_error` outcomes. It chooses temporary native ports and removes its
+processes. Compose publishes Prometheus on `${PROMETHEUS_PORT:-9090}`;
+`container-proof.sh` chooses a free host port automatically.
+
+No Alertmanager or pager is configured. A loaded/firing rule is **not** proof of
+external notification delivery. This is Prometheus metrics evidence. Distributed
+traces are a separate loopback OTLP proof; see [slo.md](slo.md) for the 99%
+availability and 95% under-500ms objectives, burn-alert arithmetic, and
+forbidden trace attributes.
+
+```bash
+PYTHON_BIN="$PWD/.venv/bin/python" ./scripts/trace-proof.sh
+python3 -m json.tool .trace-proof/receipt.json
+```
+
+The trace proof must report direct workflow CLIENT→API SERVER causality: the
+SERVER span shares the W3C trace ID and has `parent_span_id == client.span_id`.
+It must also report the bounded `approval.requested` /
+`mutation.failed_resumable` / `mutation.replayed` events. It must not contain
+fixture tokens, capabilities, idempotency keys, notes, or bodies. Capture binds
+127.0.0.1 only and is not a collector backend.
+
 ## Troubleshooting
 
 ### `enterprise-mcp configuration error: ENTERPRISE_API_TOKEN is not set`
@@ -86,9 +148,11 @@ is **not** enough for an MCP subprocess.
 
 ### MCP smoke fails before the protocol calls
 
-`ENTERPRISE_API_URL` must point at the published Compose port
-(`http://127.0.0.1:8080` from the host). Inside containers use
-`http://enterprise-api:8080`.
+`ENTERPRISE_API_URL` must point at the published Compose host port
+(`http://127.0.0.1:${ENTERPRISE_API_PORT:-8080}` for manual Compose use).
+Inside containers use `http://enterprise-api:8080`. `container-proof.sh`
+overrides the host port with a free loopback port and passes that exact URL to
+the demo; do not assume it used 8080.
 
 ### MCP smoke fails: hermes CLI not found
 
@@ -204,6 +268,9 @@ done
 | `.mcp-receipts/fastmcp-protocol.json` | Protocol checks including the negative control |
 | `.mcp-receipts/hermes-mcp-proof.json` | Hermes discovery receipt |
 | `.mcp-receipts/hermes-tool-filter-proof.json` | Differential scope proof |
+| `.telemetry-proof/receipt.json` | Native Prometheus release hash, target, alerts, rule fixtures, and queried metric outcomes |
+| `.trace-proof/receipt.json` | Native OTLP capture: verified CLIENT→SERVER parent links, shared trace IDs, span names, bounded approval events |
+| `.container-proof/receipt.json` | Compose restart/replay and telemetry evidence when a container runtime pass exists |
 | `.audit/*.jsonl` | Append-only audit trail |
 
 All are gitignored.

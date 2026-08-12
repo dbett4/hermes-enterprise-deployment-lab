@@ -121,15 +121,15 @@ the log records only what the workflow runner chose to report.
 
 ## Supported use
 
-- Local Python or Podman Compose on a developer machine
+- Local Python or Docker/Podman Compose on a developer machine
 - Isolated `HERMES_HOME` for MCP discovery proof
 - CI protocol-level smoke without live Hermes credentials
 
 ## Out of scope
 
-OIDC, Kubernetes hardening, production secret management, multi-process-safe
-approval storage, authenticated approval identity, independent human judgment,
-and any real external mutation.
+OIDC, Kubernetes hardening, production secret management, distributed or
+transactional approval storage, authenticated approval identity, independent
+human judgment, and any real external mutation.
 
 No LLM invokes these tools in this repository. A model-driven run requires
 provider spend, which I declined on 2026-08-01. Scripts and tests make every

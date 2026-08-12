@@ -22,11 +22,14 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from opentelemetry.trace import SpanKind, Status, StatusCode
+
 from workflow_runner.approvals import ApprovalStore
 from workflow_runner.audit import AuditLog
 from workflow_runner.client import EnterpriseApiClient
 from workflow_runner.errors import WorkflowError, WorkflowErrorCode
 from workflow_runner.models import DependencyCall
+from workflow_runner.tracing import add_bounded_event, ensure_tracing, get_tracer
 
 STATUS_PENDING_APPROVAL = "pending_approval"
 STATUS_APPROVAL_REJECTED = "approval_rejected"
@@ -39,7 +42,7 @@ APPLY_LIMITATIONS = [
     "The approval gate is enforced in this workflow layer; it is not a Hermes-side policy control.",
     "Approval is granted through a separate local operator command with a recorded identity; "
     "the lab does not integrate a production identity provider or policy engine.",
-    "The local JSON approval store is suitable for this single-host lab, not concurrent production use.",
+    "The local JSON approval store uses single-host fcntl file locks; it is not a distributed production datastore.",
     "A resume reuses the approval's idempotency key, so the API returns the original record.",
     "Deduplication is keyed on the idempotency key, which is minted per approval: two approvals "
     "for the same action_id produce two records.",
@@ -61,6 +64,39 @@ def apply_incident_action(
     client: EnterpriseApiClient,
     incident_id: str,
     action_id: str,
+    approval_capability: str | None = None,
+    note: str | None = None,
+    inject: str | None = None,
+    approvals: ApprovalStore | None = None,
+    audit: AuditLog | None = None,
+) -> dict[str, Any]:
+    approvals = approvals or ApprovalStore()
+    audit = audit or AuditLog()
+    ensure_tracing()
+    with get_tracer().start_as_current_span(
+        "apply_incident_action",
+        kind=SpanKind.INTERNAL,
+        record_exception=False,
+        set_status_on_exception=False,
+    ) as span:
+        return _apply_incident_action(
+            client,
+            incident_id,
+            action_id,
+            span,
+            approval_capability=approval_capability,
+            note=note,
+            inject=inject,
+            approvals=approvals,
+            audit=audit,
+        )
+
+
+def _apply_incident_action(
+    client: EnterpriseApiClient,
+    incident_id: str,
+    action_id: str,
+    span: Any,
     approval_capability: str | None = None,
     note: str | None = None,
     inject: str | None = None,
@@ -94,6 +130,7 @@ def apply_incident_action(
             outcome="runbook_lookup_failed",
             error_code=exc.code.value,
         )
+        span.set_status(Status(StatusCode.ERROR))
         return finish(
             {
                 "status": STATUS_ERROR,
@@ -114,6 +151,7 @@ def apply_incident_action(
             action_id=action_id,
             outcome="unknown_action_id",
         )
+        add_bounded_event(span, "approval.rejected", {"reason": "unknown_action_id"})
         return finish(
             {
                 "status": STATUS_APPROVAL_REJECTED,
@@ -143,6 +181,7 @@ def apply_incident_action(
             approval_id=approval.approval_id,
             outcome="blocked_pending_operator_approval",
         )
+        add_bounded_event(span, "approval.requested")
         return finish(
             {
                 "status": STATUS_PENDING_APPROVAL,
@@ -171,6 +210,11 @@ def apply_incident_action(
             incident_id=incident_id,
             action_id=action_id,
             outcome=rejection or "invalid_approval_capability",
+        )
+        add_bounded_event(
+            span,
+            "approval.rejected",
+            {"reason": rejection} if rejection else None,
         )
         return finish(
             {
@@ -204,6 +248,9 @@ def apply_incident_action(
         inject=inject,
     )
 
+    add_bounded_event(span, "approval.accepted")
+    add_bounded_event(span, "mutation.dispatched")
+
     try:
         payload, call = client.apply_action(
             incident_id=incident_id,
@@ -231,6 +278,8 @@ def apply_incident_action(
             error_code=exc.code.value,
             resumable=True,
         )
+        add_bounded_event(span, "mutation.failed_resumable")
+        span.set_status(Status(StatusCode.ERROR))
         return finish(
             {
                 "status": STATUS_ERROR,
@@ -270,6 +319,7 @@ def apply_incident_action(
         record_id=record.get("record_id"),
         total_actions_for_incident=payload.get("total_actions_for_incident"),
     )
+    add_bounded_event(span, "mutation.replayed" if replayed else "mutation.applied")
 
     return finish(
         {

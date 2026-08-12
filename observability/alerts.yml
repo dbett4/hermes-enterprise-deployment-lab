@@ -1,0 +1,123 @@
+groups:
+  - name: enterprise-api-slo
+    interval: 15s
+    rules:
+      - alert: EnterpriseApiAvailabilityFastBurn
+        expr: |-
+          (
+            sum(rate(enterprise_api_http_requests_total{route!~"/(healthz|readyz)",status_class="5xx"}[1h]))
+            /
+            clamp_min(sum(rate(enterprise_api_http_requests_total{route!~"/(healthz|readyz)"}[1h])), 0.000001)
+          ) > (14.4 * 0.01)
+          and
+          (
+            sum(rate(enterprise_api_http_requests_total{route!~"/(healthz|readyz)",status_class="5xx"}[5m]))
+            /
+            clamp_min(sum(rate(enterprise_api_http_requests_total{route!~"/(healthz|readyz)"}[5m])), 0.000001)
+          ) > (14.4 * 0.01)
+        for: 2m
+        labels:
+          severity: page
+          slo: availability
+        annotations:
+          summary: Enterprise API is burning the availability error budget quickly
+          description: Both the 1h and 5m error rates exceed the 14.4x burn threshold for the 99% availability SLO.
+          runbook_url: https://github.com/dbett4/hermes-enterprise-deployment-lab/blob/main/docs/runbook.md#telemetry-alerts
+
+      - alert: EnterpriseApiAvailabilitySlowBurn
+        expr: |-
+          (
+            sum(rate(enterprise_api_http_requests_total{route!~"/(healthz|readyz)",status_class="5xx"}[6h]))
+            /
+            clamp_min(sum(rate(enterprise_api_http_requests_total{route!~"/(healthz|readyz)"}[6h])), 0.000001)
+          ) > (6 * 0.01)
+          and
+          (
+            sum(rate(enterprise_api_http_requests_total{route!~"/(healthz|readyz)",status_class="5xx"}[30m]))
+            /
+            clamp_min(sum(rate(enterprise_api_http_requests_total{route!~"/(healthz|readyz)"}[30m])), 0.000001)
+          ) > (6 * 0.01)
+        for: 15m
+        labels:
+          severity: ticket
+          slo: availability
+        annotations:
+          summary: Enterprise API is steadily burning the availability error budget
+          description: Both the 6h and 30m error rates exceed the 6x burn threshold for the 99% availability SLO.
+          runbook_url: https://github.com/dbett4/hermes-enterprise-deployment-lab/blob/main/docs/runbook.md#telemetry-alerts
+
+      - alert: EnterpriseApiLatencyFastBurn
+        expr: |-
+          (
+            clamp_min(
+              sum(rate(enterprise_api_http_request_duration_seconds_count{route!~"/(healthz|readyz)"}[1h]))
+              -
+              sum(rate(enterprise_api_http_request_duration_seconds_bucket{route!~"/(healthz|readyz)",le="0.5"}[1h])),
+              0
+            )
+            /
+            clamp_min(sum(rate(enterprise_api_http_request_duration_seconds_count{route!~"/(healthz|readyz)"}[1h])), 0.000001)
+          ) > (14.4 * 0.05)
+          and
+          (
+            clamp_min(
+              sum(rate(enterprise_api_http_request_duration_seconds_count{route!~"/(healthz|readyz)"}[5m]))
+              -
+              sum(rate(enterprise_api_http_request_duration_seconds_bucket{route!~"/(healthz|readyz)",le="0.5"}[5m])),
+              0
+            )
+            /
+            clamp_min(sum(rate(enterprise_api_http_request_duration_seconds_count{route!~"/(healthz|readyz)"}[5m])), 0.000001)
+          ) > (14.4 * 0.05)
+        for: 2m
+        labels:
+          severity: page
+          slo: latency
+        annotations:
+          summary: Enterprise API is burning the latency error budget quickly
+          description: Both the 1h and 5m slow-request ratios exceed the 14.4x burn threshold for the 95% under 500 ms latency SLO.
+          runbook_url: https://github.com/dbett4/hermes-enterprise-deployment-lab/blob/main/docs/runbook.md#telemetry-alerts
+
+      - alert: EnterpriseApiLatencySlowBurn
+        expr: |-
+          (
+            clamp_min(
+              sum(rate(enterprise_api_http_request_duration_seconds_count{route!~"/(healthz|readyz)"}[6h]))
+              -
+              sum(rate(enterprise_api_http_request_duration_seconds_bucket{route!~"/(healthz|readyz)",le="0.5"}[6h])),
+              0
+            )
+            /
+            clamp_min(sum(rate(enterprise_api_http_request_duration_seconds_count{route!~"/(healthz|readyz)"}[6h])), 0.000001)
+          ) > (6 * 0.05)
+          and
+          (
+            clamp_min(
+              sum(rate(enterprise_api_http_request_duration_seconds_count{route!~"/(healthz|readyz)"}[30m]))
+              -
+              sum(rate(enterprise_api_http_request_duration_seconds_bucket{route!~"/(healthz|readyz)",le="0.5"}[30m])),
+              0
+            )
+            /
+            clamp_min(sum(rate(enterprise_api_http_request_duration_seconds_count{route!~"/(healthz|readyz)"}[30m])), 0.000001)
+          ) > (6 * 0.05)
+        for: 15m
+        labels:
+          severity: ticket
+          slo: latency
+        annotations:
+          summary: Enterprise API is steadily burning the latency error budget
+          description: Both the 6h and 30m slow-request ratios exceed the 6x burn threshold for the 95% under 500 ms latency SLO.
+          runbook_url: https://github.com/dbett4/hermes-enterprise-deployment-lab/blob/main/docs/runbook.md#telemetry-alerts
+
+      - alert: EnterpriseApiPostCommitFailure
+        expr: |-
+          increase(enterprise_api_action_outcomes_total{outcome="postcommit_error"}[10m]) > 0
+        for: 0m
+        labels:
+          severity: page
+          slo: mutation_safety
+        annotations:
+          summary: Enterprise API returned an ambiguous failure after committing an action
+          description: At least one action committed and then returned 5xx; resume with the same approval capability and idempotency key before any new attempt.
+          runbook_url: https://github.com/dbett4/hermes-enterprise-deployment-lab/blob/main/docs/runbook.md#telemetry-alerts

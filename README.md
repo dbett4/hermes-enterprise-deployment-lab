@@ -16,9 +16,11 @@ separated operator-approval design landed 2026-08-11 ([ADR 005](docs/adr/005-sep
 The public extract was published later in August; GitHub dates mark publication, not a
 longer private timeline.
 
-This is a **synthetic lab**: mock enterprise API, fixture bearer tokens, in-memory
-writes, and **73** credential-free tests. It is not evidence of customer-environment
-deployment, production identity integration, or model-driven agent runs.
+This is a **synthetic lab**: mock enterprise API, fixture bearer tokens, optional
+file-backed fixture writes, a credential-free test suite, and a local Prometheus
+telemetry proof. It is not evidence of customer-environment deployment,
+production identity integration, external alert delivery, or model-driven agent
+runs.
 
 I built this small deployment lab to work through the failure cases that matter
 when an agent can touch an internal system. It includes a mock enterprise API,
@@ -42,9 +44,20 @@ Run the whole thing in one command:
 ./scripts/demo.sh
 ```
 
-`./scripts/proof.sh` runs all 73 tests, inspects the MCP server, parses the
-Compose file, and exercises the failure/resume path. The same test suite and a
-fresh-clone check run in [GitHub Actions](https://github.com/dbett4/hermes-enterprise-deployment-lab/actions).
+`./scripts/proof.sh` runs the current local test suite, inspects the MCP server,
+parses the Compose file, exercises the failure/resume path, runs a
+repository-pinned plus upstream-manifest-checked native Prometheus
+scrape/query/rule proof, and runs a
+loopback OTLP/HTTP trace proof. It starts temporary localhost processes for
+telemetry and tracing but does not start containers by default. The workflow
+defines separate `container-proof` and `cloud-iac-proof` jobs. Treat the
+Actions run and uploaded receipt for the exact commit as the authority: only a
+green Docker-backed job attests the container path, while the cloud job remains
+no-refresh/no-apply validation and never deployment evidence. On a
+Docker-capable host, use `PROOF_WITH_CONTAINERS=1` or `--with-containers`, or
+call `bash ./scripts/container-proof.sh`. The current test suite and a
+fresh-clone check run in
+[GitHub Actions](https://github.com/dbett4/hermes-enterprise-deployment-lab/actions).
 No provider credentials are needed. [PROOF.md](PROOF.md) lists the check behind
 each claim.
 
@@ -66,7 +79,11 @@ You can rerun each result below:
 | Credentials really reach the MCP subprocess — a wrong token actually fails | `pytest enterprise-mcp/tests/test_stdio_credential_injection.py` |
 | The server fails closed with no token instead of falling back to a default | same file, `test_server_fails_closed_without_a_token` |
 | The workflow runner's audit log records request, named operator grant, capability acceptance, failure, and replay | `pytest workflow-runner/tests/test_audit.py`, demo STEP 10. The log is not tamper-evident |
-| A clean clone of HEAD reproduces the test suite and the demo | `./scripts/fresh-clone-check.sh` — it runs `pytest` and `scripts/demo.sh` only; it does **not** re-run the Hermes or container proofs |
+| A clean clone of HEAD reproduces the test suite and the demo | `./scripts/fresh-clone-check.sh` — it runs `pytest` and `scripts/demo.sh` only; it does **not** re-run native telemetry, trace, Hermes, or container proofs |
+| The API exports bounded-cardinality request and mutation-outcome metrics, and Prometheus can scrape/query them | `./scripts/telemetry-proof.sh` — native localhost API + repository-pinned plus upstream-manifest-checked Prometheus; receipt under `.telemetry-proof/` |
+| Five availability, latency, and mutation-safety alerts load and behave under positive and idle-series fixtures | `promtool test rules observability/alerts.test.yml`, executed by both telemetry proof paths |
+| Workflow-runner CLIENT spans directly parent API SERVER spans (`SERVER.parent_span_id == CLIENT.span_id`) under the same W3C trace ID, with bounded approval/failure/resume events and no secret attributes | `./scripts/trace-proof.sh` — loopback OTLP/HTTP capture with a wrong-parent negative control; receipt under `.trace-proof/` |
+| Compose API is intended to keep one side effect across container restart and replay | `bash ./scripts/container-proof.sh` is implemented locally; a Docker-capable pass is still required |
 
 Hermes is an external client, not a Compose service. The discovery scripts use
 an isolated `HERMES_HOME` and never touch `~/.hermes/config.yaml`. Hermes lists
@@ -84,7 +101,9 @@ the tools; `scripts/*.sh` and `pytest` call them.
   behind authenticated operator access.
 - `APPROVAL_STORE_PATH` is an unauthenticated JSON file. It stores only a SHA-256
   hash of the capability, but any local process that can edit the file can
-  bypass the control. It is not a transactional authorization service.
+  bypass the control. Same-host writers are serialized with a separate
+  `<path>.lock` via Linux `fcntl.flock`; this is a single-host demonstration,
+  not a distributed or production authorization service.
 - The `.jsonl` audit log has no signature, chain hash, or WORM storage.
   `run_started` and `run_finished` have a null correlation ID. The API has no
   audit log of its own, so direct API writes do not appear here.
@@ -100,8 +119,22 @@ the tools; `scripts/*.sh` and `pytest` call them.
   can bypass it and call the fixture API directly, with no audit entry.
 - This is not a production deployment: no OIDC, Kubernetes, real identity
   provider, cloud/hybrid scaling, or customer data. It has one deterministic
-  incident (`INC-2026-0042`), and a "write" adds a record to an in-memory store.
-- CI parses `compose.yaml` but does not start containers; optional Podman/Docker smoke runs are not attested in the public tree.
+  incident (`INC-2026-0042`). A write adds a record to an in-memory store by
+  default, or to an optional JSON file when `ACTION_STORE_PATH` is set (Compose
+  uses a volume so restart proofs can survive process death).
+- The workflow defines a `container-proof` job intended to check negative auth,
+  post-commit failure, restart persistence, replay, and demo against the
+  containerized API. A runtime pass applies only to an exact commit whose
+  Docker-capable job is green and whose uploaded receipt reports a pass. Even
+  then, it does not prove Kubernetes, OIDC, cloud deploy, or model-driven
+  invocation. Missing Docker/Podman engine access fails closed (exit 2).
+  `proof.sh` does not start containers unless you opt in; its default telemetry
+  check still starts and cleans up temporary native processes.
+- Prometheus metrics, SLO expressions, and alert-rule fixtures are implemented
+  and proven with native localhost processes. Opt-in OpenTelemetry tracing is
+  proven with loopback OTLP/HTTP capture. There is no Alertmanager, pager,
+  collector backend, retention system, or production traffic. Native proofs are
+  not evidence that the Compose telemetry path ran.
 
 ## How it works
 
@@ -113,6 +146,9 @@ Hermes / script ──stdio──► enterprise-mcp ──Bearer+Idempotency-Key
  approval store ◄── operator command --approver <identity>
         │                     │
         └─ one-time capability (plaintext never persisted)
+
+Prometheus ──scrape /metrics──► enterprise-api
+OTLP capture (opt-in, loopback) ◄── workflow-runner CLIENT + enterprise-api SERVER
 ```
 
 1. **Choose the surface.** The default allowlist exposes read/plan tools only.
@@ -135,8 +171,10 @@ Hermes / script ──stdio──► enterprise-mcp ──Bearer+Idempotency-Key
 
 Prerequisites: **Python 3.11, 3.12, or 3.13**. Not 3.14 — `pydantic-core` has no
 wheel for it and its vendored PyO3 tops out at 3.13, so a source build fails.
-Podman and the Hermes CLI are optional and only needed for the container and
-Hermes proofs.
+The native telemetry proof also needs `curl`, `sha256sum`, `tar`, and network
+access to the pinned Prometheus release. The trace proof needs `curl` only and
+stays on loopback. Docker or Podman and the Hermes CLI are
+optional and only needed for the container and Hermes proofs.
 
 ```bash
 git clone https://github.com/dbett4/hermes-enterprise-deployment-lab
@@ -152,15 +190,22 @@ python3 -m venv .venv
 ./scripts/demo.sh          # the whole arc; boots its own API, no containers needed
 ```
 
-Optional container and Hermes checks:
+Optional focused and self-contained container checks:
 
 ```bash
-podman machine start                 # once, if the default machine is stopped
-podman compose up -d --build
-./scripts/smoke.sh                   # containerized workflow-runner receipt
+./scripts/telemetry-proof.sh          # native API + Prometheus, no containers
+./scripts/trace-proof.sh              # native API + loopback OTLP capture, no containers
+bash ./scripts/container-proof.sh     # dynamic free host ports; restart + replay + demo; performs teardown
+```
+
+For a manual fixed-port Compose stack that stays up for Hermes/MCP checks, start
+and stop it separately from `container-proof.sh`:
+
+```bash
+docker compose up -d --build enterprise-api prometheus
 ENTERPRISE_API_URL=http://127.0.0.1:8080 ./scripts/mcp-smoke.sh
 ENTERPRISE_API_URL=http://127.0.0.1:8080 ./scripts/hermes-tool-filter-proof.sh
-podman compose down -v
+docker compose down -v --remove-orphans
 ```
 
 `workflow-runner` is a run-to-completion container that exits 0 by design; some
@@ -185,6 +230,11 @@ Runs the FastMCP inspect/list/call checks without the Hermes CLI. Full local smo
 | `ENTERPRISE_INJECT_FAILURE` | Deterministic fault: `error`, `error_after_commit`, `timeout` |
 | `APPROVAL_TTL_SECONDS` | Lifetime of a pending/approved request; default 900 seconds |
 | `AUDIT_LOG_PATH` / `APPROVAL_STORE_PATH` | Where the audit trail and approval store live |
+| `ACTION_STORE_PATH` | Optional JSON path for applied actions. Unset = in-memory. Compose sets a volume path |
+| `ENTERPRISE_API_PORT` | Optional loopback host port for the Compose API; defaults to 8080 outside the container proof |
+| `PROMETHEUS_PORT` | Optional host port for the Compose Prometheus service; defaults to 9090 outside the container proof |
+| `OTEL_TRACES_EXPORTER` | Opt-in tracing. Must be `otlp` together with a loopback OTLP endpoint or tracing stays off |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Loopback OTLP/HTTP collector. Non-loopback endpoints are ignored |
 
 **MCP stdio does not inherit your environment.** The SDK forwards only
 `HOME`, `LOGNAME`, `PATH`, `SHELL`, `USER`. Anything else must be passed
@@ -233,6 +283,7 @@ ENTERPRISE_API_WRITE_TOKEN=lab-write-token
 | Document | Contents |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Components, checks, and security model |
+| [`docs/slo.md`](docs/slo.md) | 99%/95% objectives, burn-alert math, trace allowlist, and evidence limits |
 | [`docs/runbook.md`](docs/runbook.md) | Operator commands and troubleshooting |
 | [`docs/adr/003-stdio-mcp-read-plan-tools.md`](docs/adr/003-stdio-mcp-read-plan-tools.md) | Why stdio MCP |
 | [`docs/adr/004-enforced-approval-idempotency-and-scoped-tools.md`](docs/adr/004-enforced-approval-idempotency-and-scoped-tools.md) | Historical two-call guard and credential/scoping decision |
@@ -248,22 +299,28 @@ ENTERPRISE_API_WRITE_TOKEN=lab-write-token
 | M2 Identity/integration boundary | **Partial** — two static bearer scopes; no OIDC, no connector pagination/retry |
 | M3 Agent workflow (MCP + Hermes discovery) | **Partial by design** — the real Hermes CLI discovers the scoped surface; no model-driven invocation (provider spend declined 2026-08-01) |
 | M4 Separated approval, idempotency, resume, audit | **Partial** — role separation, expiry, terminal use, and ambiguous-failure resume work. Identity is supplied by the caller and the audit is not tamper-evident |
-| M5 CI from a fresh clone | **Complete** — tests and fresh-clone job pass in GitHub Actions |
+| M5 CI from a fresh clone | **Partial** — test/fresh-clone are existing public evidence; container runtime is attested only by a green exact-commit `container-proof` job and passing uploaded receipt |
+| Local telemetry extension | **Implemented and locally verified / CI job defined** — live native scrape/query plus positive and negative rule tests pass; no external notification delivery or Docker-backed telemetry run is claimed |
+| Local trace extension | **Implemented and locally verified / CI job defined** — loopback OTLP/HTTP capture of W3C CLIENT/SERVER spans and bounded approval events; no collector backend or production traffic is claimed |
+| Local cloud/hybrid IaC reference | **Implemented and locally verified / CI job defined / not deployed** — pinned OpenTofu and AWS-provider plans exercise a disabled zero-resource graph and an enabled private Fargate graph without AWS refresh or apply; per-commit CI status is visible in Actions |
 
 ## Work not done
 
-Nothing in this table is currently in progress.
+These boundaries remain open or deliberately out of scope.
 
 | Item | State | Note |
 |---|---|---|
 | Production approval identity/policy integration | Not implemented | The operator command records a supplied identity but does not authenticate it. |
 | Model-driven tool invocation | **Declined, 2026-08-01** | Provider spend declined. Permanent; this repository will never demonstrate it. |
 | Second-operator validation | **Unrun** | `docs/second-operator-protocol.md` is a script nobody has executed. |
-| CI run | Complete | Tests and the separate fresh-clone job pass in GitHub Actions. |
+| CI container-proof run | **Per-commit evidence gate** | Treat the container path as attested only when the exact commit's Docker-capable Actions job is green and its uploaded receipt reports a pass. |
+| CI cloud-IaC proof run | **Per-commit validation gate** | The read-only job validates no-refresh/no-apply plans; its status is visible in Actions and cannot prove deployment or runtime behavior. |
 | Action-level deduplication | Not implemented | "Exactly once" is per approval, not per action. |
 | Approval consumption and expiry | Implemented locally | `pending → approved → applied` or `expired`; applied/expired are terminal. |
 | Authenticated approval store | Not implemented | Plain JSON at `APPROVAL_STORE_PATH`; capability plaintext is not persisted. |
 | Enterprise-API-side audit | Not implemented | A direct write to the API leaves no trace. |
+| External alert delivery | Not implemented | Prometheus loads and evaluates rules; no Alertmanager or pager is configured. |
+| OpenTelemetry traces | Implemented locally | Opt-in loopback OTLP/HTTP proof only. No collector backend, retention, or production traffic. |
 
 ### What production approval would require
 

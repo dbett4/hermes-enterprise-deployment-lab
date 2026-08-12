@@ -1,3 +1,4 @@
+import re
 import time
 
 import pytest
@@ -6,7 +7,10 @@ from fastapi.testclient import TestClient
 from app.config import settings
 
 
-def auth_headers(token: str = "lab-read-token", correlation_id: str = "test-corr-123") -> dict[str, str]:
+def auth_headers(
+    token: str = "lab-read-token",
+    correlation_id: str = "11111111-1111-4111-8111-111111111111",
+) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {token}",
         "X-Correlation-ID": correlation_id,
@@ -47,7 +51,7 @@ def test_get_incident_success(client: TestClient) -> None:
     body = response.json()
     assert body["incident_id"] == "INC-2026-0042"
     assert body["severity"] == "high"
-    assert response.headers["X-Correlation-ID"] == "test-corr-123"
+    assert response.headers["X-Correlation-ID"] == "11111111-1111-4111-8111-111111111111"
 
 
 def test_get_incident_not_found(client: TestClient) -> None:
@@ -75,8 +79,12 @@ def test_correlation_id_generated_when_missing(client: TestClient) -> None:
         headers={"Authorization": "Bearer lab-read-token"},
     )
     assert response.status_code == 200
-    assert response.headers.get("X-Correlation-ID")
-
+    returned = response.headers.get("X-Correlation-ID")
+    assert returned
+    assert re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        returned,
+    )
 
 def test_inject_error_via_query(client: TestClient) -> None:
     response = client.get(

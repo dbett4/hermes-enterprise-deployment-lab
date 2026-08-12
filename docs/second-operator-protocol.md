@@ -22,8 +22,10 @@ Record these, because they are the variables most likely to explain a difference
 | Hermes CLI version (`hermes --version`) or "not installed" | |
 | Date (UTC) | |
 
-You do **not** need Podman or Hermes for steps 1-4. They are only needed for
-steps 5 and 6.
+You do **not** need Docker, Podman, or Hermes for steps 1-5. The native telemetry
+step needs `curl`, `sha256sum`, `tar`, and release-download network access.
+The native trace step needs `curl` and stays on loopback.
+Docker or Podman is needed for step 6; Hermes is needed for step 7.
 
 ## Step 1 — clean clone
 
@@ -50,7 +52,7 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
-Record the exact summary line (for example `74 passed, 1 warning in 41.02s`).
+Record the exact summary line; do not copy a count from repository prose.
 
 ## Step 4 — the demo
 
@@ -73,25 +75,49 @@ Check each of these in the printed transcript, and mark anything that differs:
 | 8 | A read-only credential gets `auth_failure` and creates no record | STEP 9 |
 | 9 | The audit trail lists request, named grant, capability acceptance, failure, and replay events | STEP 10 |
 
-## Step 5 — containers (optional, needs Podman)
+## Step 5 — native telemetry and traces
 
 ```bash
-podman machine start          # if the default machine is stopped
-podman compose up -d --build
-curl -fsS localhost:8080/healthz
-./scripts/smoke.sh
-podman compose down -v
+PYTHON_BIN="$PWD/.venv/bin/python" ./scripts/telemetry-proof.sh
+python3 -m json.tool .telemetry-proof/receipt.json
+PYTHON_BIN="$PWD/.venv/bin/python" ./scripts/trace-proof.sh
+python3 -m json.tool .trace-proof/receipt.json
 ```
 
-Note: `workflow-runner` is a run-to-completion container and exits 0 by design.
-Some compose providers report that as a failure when `--wait` is used.
+Require target `up`, five loaded alerts, positive fixtures for every alert, the
+idle-latency negative control, and all three action outcomes. Confirm no proof
+`uvicorn` or Prometheus process remains afterward. This is native process
+evidence, not a container or external-pager result.
 
-## Step 6 — Hermes discovery (optional, needs the Hermes CLI)
+The trace proof must show direct workflow CLIENT→API SERVER causality: the
+SERVER span shares the W3C trace ID and has `parent_span_id == client.span_id`.
+It must also show bounded pending/failure/resume events. Captured bytes and the receipt
+must not contain fixture tokens, capabilities, idempotency keys, notes, or
+bodies. Confirm the OTLP capture process is gone afterward. This is sampled
+local capture, not a collector backend.
+
+## Step 6 — containers (optional, needs Docker or Podman Compose)
 
 ```bash
-export ENTERPRISE_API_URL=http://127.0.0.1:8080
-./scripts/hermes-mcp-proof.sh          # discovery receipt
-./scripts/hermes-tool-filter-proof.sh  # differential scope proof
+bash ./scripts/container-proof.sh
+```
+
+Expect `CONTAINER_PROOF_PASS`. Receipts land under `.container-proof/`.
+
+The proof tears its isolated Compose project down before writing a pass receipt.
+It leaves no API on port 8080; Step 7 starts a separate manual stack.
+
+## Step 7 — Hermes discovery (optional, needs the Hermes CLI)
+
+```bash
+(
+  set -e
+  trap 'docker compose down -v --remove-orphans' EXIT
+  docker compose up -d --build enterprise-api prometheus
+  export ENTERPRISE_API_URL=http://127.0.0.1:8080
+  ./scripts/hermes-mcp-proof.sh          # discovery receipt
+  ./scripts/hermes-tool-filter-proof.sh  # differential scope proof
+)
 ```
 
 Both use an isolated `HERMES_HOME` under your temp directory and must not touch
@@ -101,7 +127,11 @@ Both use an isolated `HERMES_HOME` under your temp directory and must not touch
 - The differential proof reports 4 tools for `all` and 1 tool for a single-tool
   allowlist.
 
-## Step 7 — try to break it
+If you already have a separate Compose stack up, the older read/plan smoke is
+`./scripts/smoke.sh`. `workflow-runner` is a run-to-completion container and exits
+0 by design; some Compose providers report that as a failure under `--wait`.
+
+## Step 8 — try to break it
 
 Spend ten minutes trying to make the lab do something it claims it will not:
 
@@ -118,7 +148,7 @@ Record anything that succeeded when it should not have.
 
 ## Results
 
-Not run as of 2026-08-01. No validator has been identified or scheduled.
+Not run. No validator has been identified or scheduled.
 
 | Field | Value |
 |---|---|
@@ -128,9 +158,11 @@ Not run as of 2026-08-01. No validator has been identified or scheduled.
 | Environment (from the table above) | |
 | Step 3 pytest summary line | |
 | Step 4 demo result (pass/fail) | |
-| Step 5 container result (pass/fail/skipped) | |
-| Step 6 Hermes result (pass/fail/skipped) | |
-| Step 7 findings | |
+| Step 5 native telemetry result (pass/fail) | |
+| Step 5 native trace result (pass/fail) | |
+| Step 6 container result (pass/fail/skipped) | |
+| Step 7 Hermes result (pass/fail/skipped) | |
+| Step 8 findings | |
 | Claims that did NOT hold | |
 | Overall verdict | |
 

@@ -13,11 +13,14 @@ from typing import Any
 
 import httpx
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import SpanKind
 
 from workflow_runner.approvals import ApprovalStore
 from workflow_runner.audit import AuditLog
 from workflow_runner.client import EnterpriseApiClient
 from workflow_runner.executor import apply_incident_action
+from workflow_runner.tracing import configure_tracing, flush_tracing, reset_tracing_for_tests, shutdown_tracing
 
 RUNBOOK: dict[str, Any] = {
     "incident_id": "INC-2026-0042",
@@ -42,7 +45,10 @@ class RecordingApi:
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append((request.method, request.url.path))
-        headers = {"Content-Type": "application/json", "X-Correlation-ID": "corr-exec"}
+        headers = {
+            "Content-Type": "application/json",
+            "X-Correlation-ID": "44444444-4444-4444-8444-444444444444",
+        }
         if request.url.path.endswith("/runbook"):
             return httpx.Response(200, content=json.dumps(RUNBOOK).encode(), headers=headers)
         if request.method == "POST":
@@ -50,6 +56,12 @@ class RecordingApi:
             replayed = key in self.records
             if not replayed:
                 self.records[key] = {"record_id": f"ACT-{len(self.records) + 1}", "idempotency_key": key}
+            if "error_after_commit" in str(request.url.query):
+                return httpx.Response(
+                    500,
+                    content=json.dumps({"detail": "Injected upstream failure after commit"}).encode(),
+                    headers=headers,
+                )
             return httpx.Response(
                 200 if replayed else 201,
                 content=json.dumps(
@@ -283,3 +295,125 @@ def test_expired_pending_request_cannot_be_approved(tmp_path: Path) -> None:
     assert grant is None
     assert rejection == "approval_expired"
     assert approvals.get(request.approval_id).status == "expired"
+
+
+def _internal_events(exporter: InMemorySpanExporter) -> list[list[str]]:
+    flush_tracing()
+    return [
+        [event.name for event in span.events]
+        for span in exporter.get_finished_spans()
+        if span.kind == SpanKind.INTERNAL and span.name == "apply_incident_action"
+    ]
+
+
+def _span_blob(exporter: InMemorySpanExporter) -> str:
+    flush_tracing()
+    return "\n".join(span.to_json() for span in exporter.get_finished_spans())
+
+
+@pytest.fixture
+def span_exporter(monkeypatch: pytest.MonkeyPatch) -> InMemorySpanExporter:
+    monkeypatch.setenv("OTEL_TRACES_EXPORTER", "otlp")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318")
+    reset_tracing_for_tests()
+    exporter = InMemorySpanExporter()
+    configure_tracing(exporter=exporter)
+    yield exporter
+    shutdown_tracing()
+    reset_tracing_for_tests()
+
+
+def test_pending_flow_emits_approval_requested_event(
+    api: RecordingApi, tmp_path: Path, span_exporter: InMemorySpanExporter
+) -> None:
+    approvals, audit = _stores(tmp_path)
+    apply_incident_action(
+        _client(api),
+        incident_id="INC-2026-0042",
+        action_id="RB-PAY-GATEWAY-01-S2",
+        note="secret-note-must-not-trace",
+        approvals=approvals,
+        audit=audit,
+    )
+    assert _internal_events(span_exporter) == [["approval.requested"]]
+    blob = _span_blob(span_exporter)
+    assert "secret-note-must-not-trace" not in blob
+    assert "lab-write-token" not in blob
+    assert "INC-2026-0042" not in blob
+    assert "RB-PAY-GATEWAY-01-S2" not in blob
+    assert "apr_" not in blob
+    assert "idem-" not in blob
+
+
+def test_rejected_flow_emits_approval_rejected_event(
+    api: RecordingApi, tmp_path: Path, span_exporter: InMemorySpanExporter
+) -> None:
+    approvals, audit = _stores(tmp_path)
+    apply_incident_action(
+        _client(api),
+        incident_id="INC-2026-0042",
+        action_id="RB-PAY-GATEWAY-01-S2",
+        approval_capability="cap_not_a_real_capability",
+        approvals=approvals,
+        audit=audit,
+    )
+    events = _internal_events(span_exporter)
+    assert events == [["approval.rejected"]]
+    blob = _span_blob(span_exporter)
+    assert "cap_not_a_real_capability" not in blob
+    assert "lab-write-token" not in blob
+
+
+def test_postcommit_failure_then_replay_emits_bounded_events(
+    api: RecordingApi, tmp_path: Path, span_exporter: InMemorySpanExporter
+) -> None:
+    approvals, audit = _stores(tmp_path)
+    pending = apply_incident_action(
+        _client(api),
+        incident_id="INC-2026-0042",
+        action_id="RB-PAY-GATEWAY-01-S2",
+        note="resume-note-must-not-trace",
+        approvals=approvals,
+        audit=audit,
+    )
+    capability = _grant(approvals, pending["approval_id"])
+    idempotency_key = approvals.get(pending["approval_id"]).idempotency_key
+
+    failed = apply_incident_action(
+        _client(api),
+        incident_id="INC-2026-0042",
+        action_id="RB-PAY-GATEWAY-01-S2",
+        approval_capability=capability,
+        note="resume-note-must-not-trace",
+        inject="error_after_commit",
+        approvals=approvals,
+        audit=audit,
+    )
+    replayed = apply_incident_action(
+        _client(api),
+        incident_id="INC-2026-0042",
+        action_id="RB-PAY-GATEWAY-01-S2",
+        approval_capability=capability,
+        note="resume-note-must-not-trace",
+        approvals=approvals,
+        audit=audit,
+    )
+
+    assert failed["status"] == "error"
+    assert replayed["status"] == "replayed"
+    assert len(api.records) == 1
+    assert _internal_events(span_exporter) == [
+        ["approval.requested"],
+        ["approval.accepted", "mutation.dispatched", "mutation.failed_resumable"],
+        ["approval.accepted", "mutation.dispatched", "mutation.replayed"],
+    ]
+    blob = _span_blob(span_exporter)
+    assert capability not in blob
+    assert idempotency_key not in blob
+    assert pending["approval_id"] not in blob
+    assert "resume-note-must-not-trace" not in blob
+    assert "lab-write-token" not in blob
+    assert "Injected upstream failure after commit" not in blob
+    assert "idem-" not in blob
+    assert "cap_" not in blob
+    assert "apr_" not in blob

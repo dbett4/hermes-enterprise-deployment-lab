@@ -1,0 +1,91 @@
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: idle existing series do not burn the latency budget
+    interval: 1m
+    input_series:
+      - series: 'enterprise_api_http_request_duration_seconds_count{method="GET",route="/v1/incidents/{incident_id}"}'
+        values: '0x420'
+      - series: 'enterprise_api_http_request_duration_seconds_bucket{method="GET",route="/v1/incidents/{incident_id}",le="0.5"}'
+        values: '0x420'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: EnterpriseApiLatencyFastBurn
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: EnterpriseApiLatencySlowBurn
+        exp_alerts: []
+
+  - name: sustained error and latency burn fires both SLO windows
+    interval: 1m
+    input_series:
+      - series: 'enterprise_api_http_requests_total{method="GET",route="/v1/incidents/{incident_id}",status_class="2xx"}'
+        values: '0+1x420'
+      - series: 'enterprise_api_http_requests_total{method="GET",route="/v1/incidents/{incident_id}",status_class="5xx"}'
+        values: '0+1x420'
+      - series: 'enterprise_api_http_request_duration_seconds_count{method="GET",route="/v1/incidents/{incident_id}"}'
+        values: '0+10x420'
+      - series: 'enterprise_api_http_request_duration_seconds_bucket{method="GET",route="/v1/incidents/{incident_id}",le="0.5"}'
+        values: '0+1x420'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: EnterpriseApiAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: availability
+            exp_annotations:
+              summary: Enterprise API is burning the availability error budget quickly
+              description: Both the 1h and 5m error rates exceed the 14.4x burn threshold for the 99% availability SLO.
+              runbook_url: https://github.com/dbett4/hermes-enterprise-deployment-lab/blob/main/docs/runbook.md#telemetry-alerts
+      - eval_time: 7h
+        alertname: EnterpriseApiAvailabilitySlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: availability
+            exp_annotations:
+              summary: Enterprise API is steadily burning the availability error budget
+              description: Both the 6h and 30m error rates exceed the 6x burn threshold for the 99% availability SLO.
+              runbook_url: https://github.com/dbett4/hermes-enterprise-deployment-lab/blob/main/docs/runbook.md#telemetry-alerts
+      - eval_time: 7h
+        alertname: EnterpriseApiLatencyFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: latency
+            exp_annotations:
+              summary: Enterprise API is burning the latency error budget quickly
+              description: Both the 1h and 5m slow-request ratios exceed the 14.4x burn threshold for the 95% under 500 ms latency SLO.
+              runbook_url: https://github.com/dbett4/hermes-enterprise-deployment-lab/blob/main/docs/runbook.md#telemetry-alerts
+      - eval_time: 7h
+        alertname: EnterpriseApiLatencySlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: latency
+            exp_annotations:
+              summary: Enterprise API is steadily burning the latency error budget
+              description: Both the 6h and 30m slow-request ratios exceed the 6x burn threshold for the 95% under 500 ms latency SLO.
+              runbook_url: https://github.com/dbett4/hermes-enterprise-deployment-lab/blob/main/docs/runbook.md#telemetry-alerts
+
+  - name: ambiguous post-commit failure pages immediately
+    interval: 1m
+    input_series:
+      - series: 'enterprise_api_action_outcomes_total{outcome="postcommit_error"}'
+        values: '0+1x15'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: EnterpriseApiPostCommitFailure
+        exp_alerts:
+          - exp_labels:
+              outcome: postcommit_error
+              severity: page
+              slo: mutation_safety
+            exp_annotations:
+              summary: Enterprise API returned an ambiguous failure after committing an action
+              description: At least one action committed and then returned 5xx; resume with the same approval capability and idempotency key before any new attempt.
+              runbook_url: https://github.com/dbett4/hermes-enterprise-deployment-lab/blob/main/docs/runbook.md#telemetry-alerts

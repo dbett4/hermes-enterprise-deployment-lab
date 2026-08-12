@@ -13,7 +13,27 @@ venv/
 receipts/
 .smoke-receipts/
 .mcp-receipts/
+# Accidental empty leftovers from a blocked shell session; keep untracked.
+tmp-write-test.txt
+tmp-agent-write.txt
+cli.json
+run-all-proofs.sh
+.container-proof/
+.telemetry-proof/
+.trace-proof/
+.cloud-iac-proof/
 .audit/
 .recordings/
 *.log
 .DS_Store
+
+# Local implementation/review evidence. Preserve it on the operator host, but
+# keep the candidate-facing repository limited to source, tests, proof scripts,
+# architecture, and runbooks.
+/docs/reviews/
+/docs/plans/
+/CURSOR_*_RECEIPT.md
+/FDE_*_RECEIPT.md
+/.shell-probe.sh
+/scripts/*.runme
+/infra/**/.write-probe

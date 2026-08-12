@@ -20,6 +20,11 @@ PYTHON_BIN="${PYTHON_BIN:-${ROOT_DIR}/.venv/bin/python}"
 if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="$(command -v python3)"
 fi
+# The API launcher changes into enterprise-api before exec. Normalize a caller-
+# supplied relative path now so `.venv/bin/python` remains valid after that cd.
+if [[ "$PYTHON_BIN" != /* ]]; then
+  PYTHON_BIN="$(cd "$(dirname "$PYTHON_BIN")" && pwd)/$(basename "$PYTHON_BIN")"
+fi
 
 export ENTERPRISE_API_TOKEN="${ENTERPRISE_API_TOKEN:-lab-read-token}"
 export ENTERPRISE_API_WRITE_TOKEN="${ENTERPRISE_API_WRITE_TOKEN:-lab-write-token}"
@@ -44,8 +49,33 @@ cleanup() {
 trap cleanup EXIT
 
 API_URL="${ENTERPRISE_API_URL:-}"
-if [[ -n "$API_URL" ]] && curl -fsS "${API_URL}/healthz" >/dev/null 2>&1; then
-  echo "==> Using the enterprise API already running at ${API_URL}"
+if [[ -n "$API_URL" ]]; then
+  if ! "$PYTHON_BIN" - "$API_URL" <<'PY'
+import ipaddress
+import sys
+from urllib.parse import urlparse
+
+parsed = urlparse(sys.argv[1])
+host = parsed.hostname
+if parsed.scheme not in {"http", "https"} or host is None:
+    raise SystemExit(1)
+if host == "localhost":
+    raise SystemExit(0)
+try:
+    address = ipaddress.ip_address(host)
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if address.is_loopback else 1)
+PY
+  then
+    echo "DEMO_FAIL: explicit ENTERPRISE_API_URL must be loopback: ${API_URL}" >&2
+    exit 2
+  fi
+  if ! curl -fsS "${API_URL}/healthz" >/dev/null 2>&1; then
+    echo "DEMO_FAIL: explicit ENTERPRISE_API_URL is not healthy: ${API_URL}" >&2
+    exit 2
+  fi
+  echo "==> Using the explicit enterprise API at ${API_URL}"
 else
   PORT="$("$PYTHON_BIN" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
   API_URL="http://127.0.0.1:${PORT}"

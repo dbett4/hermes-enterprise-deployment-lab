@@ -14,6 +14,8 @@ class Settings(BaseSettings):
         default="lab-write-token", validation_alias="ENTERPRISE_API_WRITE_TOKEN"
     )
     inject_timeout_seconds: float = Field(default=2.0, validation_alias="INJECT_TIMEOUT_SECONDS")
+    # Optional JSON file path. When unset the action store stays in memory.
+    action_store_path: str | None = Field(default=None, validation_alias="ACTION_STORE_PATH")
 
 
 settings = Settings()

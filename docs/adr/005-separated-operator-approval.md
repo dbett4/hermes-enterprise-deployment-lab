@@ -54,8 +54,8 @@ Limits:
 
 - `--approver` records a supplied identity; the lab does not authenticate it.
 - A local writer with access to `APPROVAL_STORE_PATH` can tamper with the store.
-- The JSON file and in-process lock are for a single-host lab, not concurrent
-  production operators.
+- The JSON file and a separate `<path>.lock` with Linux `fcntl.flock` are for a
+  single-host lab demonstration, not a distributed production datastore.
 - The workflow-layer gate can be bypassed by a client that holds the enterprise
   API write credential and calls the fixture API directly.
 

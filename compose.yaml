@@ -4,11 +4,14 @@ services:
       context: ./enterprise-api
     image: hermes-lab/enterprise-api:0.1.0
     ports:
-      - "8080:8080"
+      - "127.0.0.1:${ENTERPRISE_API_PORT:-8080}:8080"
     environment:
       ENTERPRISE_API_TOKEN: ${ENTERPRISE_API_TOKEN:-lab-read-token}
       ENTERPRISE_API_WRITE_TOKEN: ${ENTERPRISE_API_WRITE_TOKEN:-lab-write-token}
       INJECT_TIMEOUT_SECONDS: "2"
+      ACTION_STORE_PATH: /var/lib/enterprise-api/store/actions.json
+    volumes:
+      - enterprise-api-store:/var/lib/enterprise-api
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
       interval: 5s
@@ -38,3 +41,34 @@ services:
         limits:
           memory: 128M
           cpus: "0.25"
+
+  prometheus:
+    image: docker.io/prom/prometheus:v3.13.2@sha256:508729e0e2d18e11fd742a5a5ca70e557b940a93948c3c95fd0123a6fd538b69
+    depends_on:
+      enterprise-api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./observability/alerts.test.yml:/etc/prometheus/alerts.test.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    healthcheck:
+      test: ["CMD", "/bin/promtool", "check", "ready", "--url=http://127.0.0.1:9090"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.50"
+
+volumes:
+  enterprise-api-store:
+  prometheus-data:
