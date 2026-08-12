@@ -150,7 +150,7 @@ jobs:
         run: python -m pytest -q tests/test_cloud_iac_contract.py
 
       - name: Run no-apply cloud IaC proof
-        run: bash ./scripts/cloud-iac-proof.sh
+        run: PYTHON_BIN=$(which python) bash ./scripts/cloud-iac-proof.sh
 
       - name: Upload cloud IaC proof artifacts
         if: always()

@@ -548,3 +548,11 @@ def test_ci_defaults_every_job_to_read_only_repository_permissions() -> None:
         assert job.get("permissions", {"contents": "read"}) == {"contents": "read"}, (
             f"{name} must not expand the workflow's read-only token permissions"
         )
+
+def test_cloud_iac_job_passes_setup_python_to_proof_script() -> None:
+    """The CI job installs into setup-python, while the script defaults to .venv."""
+    workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["cloud-iac-proof"]["steps"]
+    proof_step = next(step for step in steps if step.get("name") == "Run no-apply cloud IaC proof")
+
+    assert proof_step["run"] == "PYTHON_BIN=$(which python) bash ./scripts/cloud-iac-proof.sh"
