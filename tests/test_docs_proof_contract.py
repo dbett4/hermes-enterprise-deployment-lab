@@ -166,18 +166,20 @@ def test_docs_name_the_strong_native_supply_chain_and_trace_gates() -> None:
     assert "checksum-verified Prometheus" not in combined
 
 
-def test_langgraph_stage1_is_local_until_public_ci() -> None:
-    """Stage-1 is local synthetic proof; run 31637042354 must not attest it."""
+def test_langgraph_stage1_public_ci_claim_stays_bounded() -> None:
+    """The exact public run attests only the synthetic exact-token proof."""
     readme = README.read_text(encoding="utf-8")
     proof = PROOF.read_text(encoding="utf-8")
 
-    assert "local only until a green public CI run on the adopting commit" in readme
-    assert "keyword term-overlap" in proof
-    assert "in-script two-document fixture" in proof
-    assert "No vector store" in proof or "no vector store" in proof
-    assert "scripts/agent-workflow-proof.py" in proof
-
     for path, text in (("README.md", readme), ("PROOF.md", proof)):
+        assert "31845098855" in text, f"{path} must cite the adopting public run"
+        assert "6a8c437" in text, f"{path} must bind Stage-1 to the adopting commit"
+        assert "exact keyword-token overlap" in text
+        assert "in-script two-document fixture" in text
+        assert "No vector store" in text or "no vector store" in text
+        assert "scripts/agent-workflow-proof.py" in text
+        assert "local only until a green public CI run on the adopting commit" not in text
+
         for line in text.splitlines():
             if "31637042354" in line and ("LangGraph" in line or "Stage-1" in line):
                 assert "predate" in line.lower() or "does not attest" in line.lower(), (

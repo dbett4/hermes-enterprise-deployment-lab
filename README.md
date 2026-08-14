@@ -102,7 +102,7 @@ You can rerun each result below:
 | Five availability, latency, and mutation-safety alerts load and behave under positive and idle-series fixtures | `promtool test rules observability/alerts.test.yml`, executed by both telemetry proof paths |
 | Workflow-runner CLIENT spans directly parent API SERVER spans (`SERVER.parent_span_id == CLIENT.span_id`) under the same W3C trace ID, with bounded approval/failure/resume events and no secret attributes | `./scripts/trace-proof.sh` — loopback OTLP/HTTP capture with a wrong-parent negative control; receipt under `.trace-proof/` |
 | Compose API keeps one side effect across container restart and replay | Public CI run `31637042354`, job `container-proof` (artifacts uploaded); no customer deployment or production traffic is implied |
-| A LangGraph workflow retrieves cited runbook context, routes through explicit analysis and safety-review stages, blocks missing evidence, and evaluates citation/safety integrity without executing actions (**local only until a green public CI run on the adopting commit**) | `.venv/bin/python -m pytest tests/test_agent_workflow.py -q` plus `.venv/bin/python scripts/agent-workflow-proof.py` |
+| A LangGraph workflow retrieves cited runbook context by exact keyword-token overlap, routes through explicit analysis and safety-review stages, blocks when no fixture document shares a token with the question, and evaluates citation/safety integrity without executing actions | `.venv/bin/python -m pytest tests/test_agent_workflow.py -q`, `.venv/bin/python scripts/agent-workflow-proof.py`, and public CI run `31845098855` at `6a8c437` |
 
 Hermes is an external client, not a Compose service. The discovery scripts use
 an isolated `HERMES_HOME` and never touch `~/.hermes/config.yaml`. Hermes lists
@@ -154,12 +154,12 @@ the tools; `scripts/*.sh` and `pytest` call them.
   proven with loopback OTLP/HTTP capture. There is no Alertmanager, pager,
   collector backend, retention system, or production traffic. Native proofs are
   not evidence that the Compose telemetry path ran.
-- The Stage-1 LangGraph proof is local synthetic learning only until a green
-  public CI run on the adopting commit. Retrieval is keyword term-overlap over
-  an in-script two-document fixture: no vector store, model call, action
-  execution, authorization, or external validation. The evaluator is a
-  regression check, not a mutation gate. Public run `31637042354` predates this
-  tranche and does not attest Stage-1.
+- The Stage-1 LangGraph proof is public CI-attested synthetic evidence at
+  `6a8c437` / run `31845098855`. Retrieval is exact keyword-token overlap over an
+  in-script two-document fixture: any shared token, including a common word,
+  produces a nonzero score and `ready_for_review`. This is not semantic relevance.
+  There is no vector store, model call, action execution, authorization, or
+  external validation. The evaluator is a regression check, not a mutation gate.
 
 ## How it works
 

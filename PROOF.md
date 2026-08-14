@@ -25,15 +25,14 @@ On a Docker-capable host, opt in with `PROOF_WITH_CONTAINERS=1 ./scripts/proof.s
 | Native metrics and alerts are executable | `./scripts/telemetry-proof.sh` | A repository-pinned plus upstream-manifest-checked Prometheus 3.13.2 binary scrapes the API, queries route-template and action-outcome metrics, loads five alerts, and passes positive firing plus idle-series negative fixtures | Native localhost processes and synthetic traffic only; no Compose, Alertmanager delivery, or production telemetry |
 | Native traces propagate across the approval mutation | `./scripts/trace-proof.sh` | Loopback OTLP/HTTP capture requires an API SERVER span whose trace ID matches the workflow CLIENT span and whose `parent_span_id` equals that CLIENT `span_id`, plus bounded pending/failure/resume events and no tokens, capabilities, keys, notes, or bodies | Sampled local capture only; no collector backend, retention, or production traffic |
 | Cloud/hybrid IaC is statically executable and cost-bounded by validation | `./scripts/cloud-iac-proof.sh` | Repository-pinned OpenTofu plus lock-file-pinned AWS provider format/validate; disabled plan has zero managed changes; enabled `-refresh=false` plan has one private Fargate task, internal TLS ALB, ECR/Secrets-scoped execution IAM, EFS TLS/IAM access-point authorization with scoped task mount/write policy, known-empty ALB/EFS egress, alarms, rollback, and an alert budget ≤USD 25 | No AWS refresh/apply, account, deployment, image startup, runtime, notification delivery, exact bill, or hard spend enforcement; GitHub/provider registry downloads occur |
-| Compose-backed API keeps one side effect across restart and replay | `bash ./scripts/container-proof.sh` (also wired into CI) | A Docker-capable pass must show negative auth leaves count=0; post-commit 500 leaves count=1; after `enterprise-api` restart count is still 1; same key replays; demo against that API still ends with one side effect. CI evidence is bound to the exact commit and uploaded receipt | Needs a usable `docker compose` or `podman compose` engine (CLI alone fails closed). Proves fixture JSON on a volume, not production storage, K8s, or OIDC |
+| Compose-backed API keeps one side effect across restart and replay | `bash ./scripts/container-proof.sh`; public CI runs `31637042354` and `31845098855` | A Docker-capable pass must show negative auth leaves count=0; post-commit 500 leaves count=1; after `enterprise-api` restart count is still 1; same key replays; demo against that API still ends with one side effect. CI evidence is bound to the exact commit and uploaded receipt | Needs a usable `docker compose` or `podman compose` engine (CLI alone fails closed). Proves fixture JSON on a volume, not production storage, K8s, or OIDC |
 | A new checkout reproduces the result | Current pytest suite, demo, and the separate fresh-clone CI job | Local checks complete without provider credentials | The fresh-clone path does not run native telemetry, trace, Hermes, smoke, or container checks; `proof.sh` derives its test count from pytest output and runs the separate native telemetry and trace proofs |
-| Stage-1 LangGraph cited retrieval, safety review, and evaluation (local until public CI) | `.venv/bin/python -m pytest tests/test_agent_workflow.py -q` and `.venv/bin/python scripts/agent-workflow-proof.py` | Receipt has `evaluation_passed: true`, empty `executed_actions`, and the pinned `input_sha256` / `result_sha256` | Synthetic keyword term-overlap over an in-script two-document fixture. No vector store, model call, action executor, authz, or external validation. Subordinate to the CI-attested deployment, recovery, telemetry, and container proofs. Public run `31637042354` predates this tranche and does not attest it |
+| Stage-1 LangGraph cited retrieval, safety review, and evaluation | `.venv/bin/python -m pytest tests/test_agent_workflow.py -q`, `.venv/bin/python scripts/agent-workflow-proof.py`, and public run `31845098855` | Receipt has `evaluation_passed: true`, empty `executed_actions`, and the pinned `input_sha256` / `result_sha256` | Public CI-attested synthetic exact-token overlap over an in-script two-document fixture. No vector store, model call, action executor, authz, or external validation. Subordinate to the CI-attested deployment, recovery, telemetry, and container proofs |
 
 ## Stage-1 LangGraph proof details
 
-This is a local synthetic learning proof until a green public CI run on the
-adopting commit. It is not part of the CI-attested deployment/recovery/
-telemetry/container evidence.
+This is public CI-attested synthetic evidence at `6a8c437` / run `31845098855`.
+It is not part of the deployment/recovery/telemetry/container evidence.
 
 Commands:
 
@@ -47,7 +46,9 @@ The CI `test` job tees the proof script under `.agent-workflow-proof/` with
 `fresh-clone` job runs the same script after pytest. Local `proof.sh` still
 does not invoke it.
 
-Limits: keyword term-overlap over an in-script two-document fixture. No vector
+Limits: exact keyword-token overlap over an in-script two-document fixture. Any
+single shared token, including a common word, produces a nonzero score and a
+`ready_for_review` result; this is not a semantic relevance guarantee. No vector
 store, model call, action executor, authorization, or third-party/external
 validation. `agent_workflow/evaluation.py` is a regression check on graph JSON,
 not a mutation gate.

@@ -120,6 +120,17 @@ def test_graph_fails_closed_when_retrieval_has_no_supporting_evidence() -> None:
     assert evaluate_workflow_result(result)["passed"] is True
 
 
+def test_retrieval_admits_any_shared_token_not_only_relevant_ones() -> None:
+    """Stage-1 blocking is exact-token, not semantic."""
+    retriever = _retriever()
+
+    assert retriever.search("warehouse robotics controller") == []
+    assert [document.document_id for document in retriever.search("checking the warehouse")] == [
+        "RB-IDENTITY-01",
+        "RB-PAY-01",
+    ]
+
+
 def test_evaluator_rejects_unknown_status() -> None:
     evaluation = evaluate_workflow_result(
         {
