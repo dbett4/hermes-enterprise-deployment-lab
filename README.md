@@ -59,7 +59,25 @@ call `bash ./scripts/container-proof.sh`. The current test suite and a
 fresh-clone check run in
 [GitHub Actions](https://github.com/dbett4/hermes-enterprise-deployment-lab/actions).
 No provider credentials are needed. [PROOF.md](PROOF.md) lists the check behind
-each claim.
+each claim. Public CI run `31637042354` already attests the container runtime,
+native Prometheus telemetry, and native trace proofs; the cloud IaC proof remains
+validation-only and has not applied infrastructure.
+
+The separate learning proof below is **local only until a green public CI run
+on the adopting commit**. It runs a deterministic LangGraph state graph with
+cited local retrieval, analysis, safety review, and evaluation. It makes no
+model call and executes no action. It is subordinate to the CI-attested
+deployment, recovery, telemetry, and container proofs. Public run
+`31637042354` predates this tranche and does not attest it:
+
+```bash
+.venv/bin/python scripts/agent-workflow-proof.py
+```
+
+`agent_workflow/evaluation.py` is a regression check on that graph's JSON
+result. It is not authentication, not authorization, and not a production
+mutation gate. The workflow runner's separated operator path remains the
+mutation control in this lab.
 
 ## What you can check
 
@@ -83,7 +101,8 @@ You can rerun each result below:
 | The API exports bounded-cardinality request and mutation-outcome metrics, and Prometheus can scrape/query them | `./scripts/telemetry-proof.sh` — native localhost API + repository-pinned plus upstream-manifest-checked Prometheus; receipt under `.telemetry-proof/` |
 | Five availability, latency, and mutation-safety alerts load and behave under positive and idle-series fixtures | `promtool test rules observability/alerts.test.yml`, executed by both telemetry proof paths |
 | Workflow-runner CLIENT spans directly parent API SERVER spans (`SERVER.parent_span_id == CLIENT.span_id`) under the same W3C trace ID, with bounded approval/failure/resume events and no secret attributes | `./scripts/trace-proof.sh` — loopback OTLP/HTTP capture with a wrong-parent negative control; receipt under `.trace-proof/` |
-| Compose API is intended to keep one side effect across container restart and replay | `bash ./scripts/container-proof.sh` is implemented locally; a Docker-capable pass is still required |
+| Compose API keeps one side effect across container restart and replay | Public CI run `31637042354`, job `container-proof` (artifacts uploaded); no customer deployment or production traffic is implied |
+| A LangGraph workflow retrieves cited runbook context, routes through explicit analysis and safety-review stages, blocks missing evidence, and evaluates citation/safety integrity without executing actions (**local only until a green public CI run on the adopting commit**) | `.venv/bin/python -m pytest tests/test_agent_workflow.py -q` plus `.venv/bin/python scripts/agent-workflow-proof.py` |
 
 Hermes is an external client, not a Compose service. The discovery scripts use
 an isolated `HERMES_HOME` and never touch `~/.hermes/config.yaml`. Hermes lists
@@ -135,6 +154,12 @@ the tools; `scripts/*.sh` and `pytest` call them.
   proven with loopback OTLP/HTTP capture. There is no Alertmanager, pager,
   collector backend, retention system, or production traffic. Native proofs are
   not evidence that the Compose telemetry path ran.
+- The Stage-1 LangGraph proof is local synthetic learning only until a green
+  public CI run on the adopting commit. Retrieval is keyword term-overlap over
+  an in-script two-document fixture: no vector store, model call, action
+  execution, authorization, or external validation. The evaluator is a
+  regression check, not a mutation gate. Public run `31637042354` predates this
+  tranche and does not attest Stage-1.
 
 ## How it works
 

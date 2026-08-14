@@ -22,10 +22,14 @@ run-all-proofs.sh
 .telemetry-proof/
 .trace-proof/
 .cloud-iac-proof/
+.agent-workflow-proof/
 .audit/
 .recordings/
 *.log
 .DS_Store
+
+# Local operator notes. Keep them off the public clone.
+.hermes/
 
 # Local implementation/review evidence. Preserve it on the operator host, but
 # keep the candidate-facing repository limited to source, tests, proof scripts,

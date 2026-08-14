@@ -29,6 +29,12 @@ jobs:
       - name: Run unit, contract, and MCP tests
         run: python -m pytest -q
 
+      - name: Run LangGraph Stage-1 proof
+        run: |
+          set -euo pipefail
+          mkdir -p .agent-workflow-proof
+          PYTHONPATH=. python scripts/agent-workflow-proof.py | tee .agent-workflow-proof/receipt.json
+
       - name: FastMCP inspect MCP server
         run: |
           export PYTHONPATH="${PWD}/enterprise-mcp:${PWD}/workflow-runner"
@@ -82,6 +88,7 @@ jobs:
             .trace-proof/api.log
             .trace-proof/capture.log
             .trace-proof/workflow.log
+            .agent-workflow-proof/receipt.json
           include-hidden-files: true
           if-no-files-found: error
 
@@ -182,5 +189,6 @@ jobs:
                                 -r workflow-runner/requirements.txt \
                                 -r enterprise-mcp/requirements.txt
           .venv/bin/python -m pytest -q
+          PYTHONPATH=. .venv/bin/python scripts/agent-workflow-proof.py
           cp .env.example .env
           ./scripts/demo.sh

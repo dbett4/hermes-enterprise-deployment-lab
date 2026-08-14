@@ -27,7 +27,7 @@ copy of private client infrastructure.
 
 ## What the lab was intended to cover
 
-| Nous responsibility | Lab proof |
+| Enterprise deployment responsibility | Lab proof |
 |---|---|
 | Cloud, on-prem, hybrid deployment | Local Compose profile plus a cloud-shaped deployment profile using the same contracts |
 | Internal APIs/data systems/tooling | Mock enterprise operations API and a Hermes plugin/MCP integration |
