@@ -6,80 +6,105 @@
 > credentials appear in this repository. Private client history remains confidential;
 > public claims are limited to inspectable artifacts.
 
-## History and scope
+## The problem this answers
 
-I built this lab organically in **July–August 2026**. Early August work covered Hermes
-MCP discovery, scoped tool surfaces, and a credential-injection regression
-(2026-08-01). Provider spend for model-driven invocation was declined that day, so
-every tool call in the repository comes from scripts or tests—not from a model. The
-separated operator-approval design landed 2026-08-11 ([ADR 005](docs/adr/005-separated-operator-approval.md)).
-The public extract was published later in August; GitHub dates mark publication, not a
-longer private timeline.
+When an AI agent can touch an internal system, the hard failures are not “the model
+said something wrong.” They are operational:
 
-This is a **synthetic lab**: mock enterprise API, fixture bearer tokens, optional
-file-backed fixture writes, a credential-free test suite, and a local Prometheus
-telemetry proof. It is not evidence of customer-environment deployment,
-production identity integration, external alert delivery, or model-driven agent
-runs.
+1. **Too many tools** — the agent sees write paths it should not have.
+2. **Self-approval** — the same path that proposes a change also grants it.
+3. **Lies after success** — the API already committed, then returns an error; a naive
+   retry double-writes.
+4. **No receipt** — nobody can reconstruct who approved what, or whether resume was safe.
 
-I built this small deployment lab to work through the failure cases that matter
-when an agent can touch an internal system. It includes a mock enterprise API,
-a FastMCP stdio server, a workflow runner, and a separate operator command for
-approvals.
+This lab is a **synthetic, runnable answer** to those failures. It is engineering
+evidence, not a customer Hermes Enterprise deployment, not production identity
+integration, and not a model-driven production run.
 
-A real Hermes CLI build connects to the server and lists its tools. The server
-decides which tools are available, refuses to start without credentials, and
-keeps the write path separate from the approval path. The demo then forces an
-error after the API has committed a write and shows that resuming creates no
-duplicate.
+**One-line pitch:** scope the tools, separate the human operator from the agent,
+survive the ugly post-commit failure, and leave exactly one side effect.
 
-There are two important limits. Hermes only performs discovery here; scripts
-and tests make every tool call. The approval command records an identity string
-but does not authenticate the person behind it. See [Limits](#limits) for the
-full list.
+## What it is (and is not)
 
-Run the whole thing in one command:
+| It is | It is not |
+|---|---|
+| A local deployment lab with a mock enterprise API | A customer or cloud production deploy |
+| Scoped MCP tools + a separate operator approval path | The agent approving its own writes |
+| Forced failure after commit + safe resume | Proof that every real outage is handled |
+| Credential-free tests and public CI receipts | Model-driven tool calls (scripts/tests call tools) |
+| Optional container / telemetry / trace proofs | Kubernetes, OIDC, or operated multi-tenant infra |
+
+## The story in one pass
+
+```text
+Agent (or script) sees only the allowed tools
+        ↓
+It can read and plan
+        ↓
+First write stops: pending approval, no mutation yet
+        ↓
+A separate operator command grants a one-time capability
+        ↓
+API commits — then we inject a 500 (the awkward case)
+        ↓
+Resume reuses the same idempotency key
+        ↓
+Exactly one record exists; the capability cannot be reused
+```
+
+Run the arc:
 
 ```bash
 ./scripts/demo.sh
 ```
 
-`./scripts/proof.sh` runs the current local test suite, inspects the MCP server,
-parses the Compose file, exercises the failure/resume path, runs a
-repository-pinned plus upstream-manifest-checked native Prometheus
-scrape/query/rule proof, and runs a
-loopback OTLP/HTTP trace proof. It starts temporary localhost processes for
-telemetry and tracing but does not start containers by default. The workflow
-defines separate `container-proof` and `cloud-iac-proof` jobs. Treat the
-Actions run and uploaded receipt for the exact commit as the authority: only a
-green Docker-backed job attests the container path, while the cloud job remains
-no-refresh/no-apply validation and never deployment evidence. On a
-Docker-capable host, use `PROOF_WITH_CONTAINERS=1` or `--with-containers`, or
-call `bash ./scripts/container-proof.sh`. The current test suite and a
-fresh-clone check run in
-[GitHub Actions](https://github.com/dbett4/hermes-enterprise-deployment-lab/actions).
-No provider credentials are needed. [PROOF.md](PROOF.md) lists the check behind
-each claim. Public CI run `31637042354` already attests the container runtime,
-native Prometheus telemetry, and native trace proofs; the cloud IaC proof remains
-validation-only and has not applied infrastructure.
+## Try the proof path
 
-The separate learning proof below is **local only until a green public CI run
-on the adopting commit**. It runs a deterministic LangGraph state graph with
-cited local retrieval, analysis, safety review, and evaluation. It makes no
-model call and executes no action. It is subordinate to the CI-attested
-deployment, recovery, telemetry, and container proofs. Public run
-`31637042354` predates this tranche and does not attest it:
+No provider API keys. Default proof stays on the host (tests + failure/resume +
+native telemetry/trace). Containers are optional / CI-attested.
 
 ```bash
-.venv/bin/python scripts/agent-workflow-proof.py
+./scripts/proof.sh
 ```
 
-`agent_workflow/evaluation.py` is a regression check on that graph's JSON
-result. It is not authentication, not authorization, and not a production
-mutation gate. The workflow runner's separated operator path remains the
-mutation control in this lab.
+| You want… | Run… |
+|---|---|
+| Full local story | `./scripts/demo.sh` |
+| Credential-free checks | `./scripts/proof.sh` |
+| Container restart + replay (Docker/Podman) | `PROOF_WITH_CONTAINERS=1 ./scripts/proof.sh` or `bash ./scripts/container-proof.sh` |
+| Claim table | [PROOF.md](PROOF.md) |
+| Public CI authority | [Actions](https://github.com/dbett4/hermes-enterprise-deployment-lab/actions) for the exact commit |
+
+Treat a green Docker-backed `container-proof` job plus its uploaded receipt as the
+authority for the container path. Cloud IaC jobs here are **validate only** (no
+refresh/apply) and are never deployment evidence.
+
+## Design choices that matter
+
+1. **Tool surface is decided by the server**, not hoped for in the prompt.
+2. **Approval is a different command path** from the MCP server ([ADR 005](docs/adr/005-separated-operator-approval.md)).
+3. **Plaintext capability is returned once**; only a hash is stored.
+4. **Post-commit failure is a first-class demo**, not an afterthought.
+5. **Resume is idempotent** — replay, do not re-apply.
+6. **Hermes is an external client** for discovery proofs; scripts and tests perform
+   the tool calls. I declined model-spend for invocation on 2026-08-01, so this repo
+   does not claim model-driven runs.
+
+## Sister project
+
+If this lab answers **“when an agent can touch a system, can we approve and recover
+safely?”**, the related kit answers a different question:
+
+**[Hermes Enterprise Evaluation Kit](https://github.com/dbett4/hermes-enterprise-field-kit)** —
+can we govern Hermes for enterprise-shaped work with policy packs, independent
+checks, and human review gates?
+
+Same family. Different question.
 
 ## What you can check
+
+You can rerun each result below. Prefer the plain-language claim; the command is the
+receipt.
 
 You can rerun each result below:
 
@@ -101,8 +126,8 @@ You can rerun each result below:
 | The API exports bounded-cardinality request and mutation-outcome metrics, and Prometheus can scrape/query them | `./scripts/telemetry-proof.sh` — native localhost API + repository-pinned plus upstream-manifest-checked Prometheus; receipt under `.telemetry-proof/` |
 | Five availability, latency, and mutation-safety alerts load and behave under positive and idle-series fixtures | `promtool test rules observability/alerts.test.yml`, executed by both telemetry proof paths |
 | Workflow-runner CLIENT spans directly parent API SERVER spans (`SERVER.parent_span_id == CLIENT.span_id`) under the same W3C trace ID, with bounded approval/failure/resume events and no secret attributes | `./scripts/trace-proof.sh` — loopback OTLP/HTTP capture with a wrong-parent negative control; receipt under `.trace-proof/` |
-| Compose API keeps one side effect across container restart and replay | Public CI run `31637042354`, job `container-proof` (artifacts uploaded); no customer deployment or production traffic is implied |
-| A LangGraph workflow retrieves cited runbook context by exact keyword-token overlap, routes through explicit analysis and safety-review stages, blocks when no fixture document shares a token with the question, and evaluates citation/safety integrity without executing actions | `.venv/bin/python -m pytest tests/test_agent_workflow.py -q`, `.venv/bin/python scripts/agent-workflow-proof.py`, and public CI run `31845098855` at `6a8c437` |
+| Compose API keeps one side effect across container restart and replay | Public CI run `31845098855`, job `container-proof` (artifacts uploaded); no customer deployment or production traffic is implied |
+| A LangGraph workflow retrieves tenant-scoped, cited runbook context, fails closed without tenant scope or supporting evidence, routes through explicit analysis and safety-review stages, and evaluates citation/safety integrity without executing actions | `.venv/bin/python -m pytest tests/test_agent_workflow.py -q`, `.venv/bin/python scripts/agent-workflow-proof.py`, and public CI run `31845098855` at `6a8c437` |
 
 Hermes is an external client, not a Compose service. The discovery scripts use
 an isolated `HERMES_HOME` and never touch `~/.hermes/config.yaml`. Hermes lists
