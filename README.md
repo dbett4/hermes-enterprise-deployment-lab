@@ -126,8 +126,8 @@ You can rerun each result below:
 | The API exports bounded-cardinality request and mutation-outcome metrics, and Prometheus can scrape/query them | `./scripts/telemetry-proof.sh` — native localhost API + repository-pinned plus upstream-manifest-checked Prometheus; receipt under `.telemetry-proof/` |
 | Five availability, latency, and mutation-safety alerts load and behave under positive and idle-series fixtures | `promtool test rules observability/alerts.test.yml`, executed by both telemetry proof paths |
 | Workflow-runner CLIENT spans directly parent API SERVER spans (`SERVER.parent_span_id == CLIENT.span_id`) under the same W3C trace ID, with bounded approval/failure/resume events and no secret attributes | `./scripts/trace-proof.sh` — loopback OTLP/HTTP capture with a wrong-parent negative control; receipt under `.trace-proof/` |
-| Compose API keeps one side effect across container restart and replay | Public CI run `31845098855`, job `container-proof` (artifacts uploaded); no customer deployment or production traffic is implied |
-| A LangGraph workflow retrieves tenant-scoped, cited runbook context, fails closed without tenant scope or supporting evidence, routes through explicit analysis and safety-review stages, and evaluates citation/safety integrity without executing actions | `.venv/bin/python -m pytest tests/test_agent_workflow.py -q`, `.venv/bin/python scripts/agent-workflow-proof.py`, and public CI run `31845098855` at `6a8c437` |
+| Compose API keeps one side effect across container restart and replay | Public CI run [`31891411678`](https://github.com/dbett4/hermes-enterprise-deployment-lab/actions/runs/31891411678) at `3da5938`, job `container-proof` (artifact uploaded); no customer deployment or production traffic is implied |
+| A LangGraph workflow retrieves tenant-scoped, cited runbook context, fails closed without tenant scope or supporting evidence, routes through explicit analysis and safety-review stages, and evaluates citation/safety integrity without executing actions | `.venv/bin/python -m pytest tests/test_agent_workflow.py -q`, `.venv/bin/python scripts/agent-workflow-proof.py`, and public CI run [`31891411678`](https://github.com/dbett4/hermes-enterprise-deployment-lab/actions/runs/31891411678) at `3da5938` |
 
 Hermes is an external client, not a Compose service. The discovery scripts use
 an isolated `HERMES_HOME` and never touch `~/.hermes/config.yaml`. Hermes lists
@@ -188,8 +188,8 @@ the tools; `scripts/*.sh` and `pytest` call them.
   proven with loopback OTLP/HTTP capture. There is no Alertmanager, pager,
   collector backend, retention system, or production traffic. Native proofs are
   not evidence that the Compose telemetry path ran.
-- The Stage-1 LangGraph proof is public CI-attested synthetic evidence at
-  `6a8c437` / run `31845098855`. Retrieval is exact keyword-token overlap over an
+- The hardened Stage-1 LangGraph proof is public CI-attested synthetic evidence at
+  `3da5938` / run [`31891411678`](https://github.com/dbett4/hermes-enterprise-deployment-lab/actions/runs/31891411678). Retrieval is exact keyword-token overlap over an
   in-script two-document fixture: any shared token, including a common word,
   produces a nonzero score and `ready_for_review`. This is not semantic relevance.
   There is no vector store, model call, action execution, authorization, or
@@ -358,10 +358,10 @@ ENTERPRISE_API_WRITE_TOKEN=lab-write-token
 | M2 Identity/integration boundary | **Partial** — two static bearer scopes; no OIDC, no connector pagination/retry |
 | M3 Agent workflow (MCP + Hermes discovery) | **Partial by design** — the real Hermes CLI discovers the scoped surface; no model-driven invocation (provider spend declined 2026-08-01) |
 | M4 Separated approval, idempotency, resume, audit | **Partial** — role separation, expiry, terminal use, and ambiguous-failure resume work. Identity is supplied by the caller and the audit is not tamper-evident |
-| M5 CI from a fresh clone | **Partial** — test/fresh-clone are existing public evidence; container runtime is attested only by a green exact-commit `container-proof` job and passing uploaded receipt |
-| Local telemetry extension | **Implemented and locally verified / CI job defined** — live native scrape/query plus positive and negative rule tests pass; no external notification delivery or Docker-backed telemetry run is claimed |
-| Local trace extension | **Implemented and locally verified / CI job defined** — loopback OTLP/HTTP capture of W3C CLIENT/SERVER spans and bounded approval events; no collector backend or production traffic is claimed |
-| Local cloud/hybrid IaC reference | **Implemented and locally verified / CI job defined / not deployed** — pinned OpenTofu and AWS-provider plans exercise a disabled zero-resource graph and an enabled private Fargate graph without AWS refresh or apply; per-commit CI status is visible in Actions |
+| M5 CI from a fresh clone | **CI-attested at `3da5938`** — test, fresh-clone, and Docker-backed container restart/replay jobs are green with uploaded receipts in run [`31891411678`](https://github.com/dbett4/hermes-enterprise-deployment-lab/actions/runs/31891411678) |
+| Native telemetry extension | **CI-attested at `3da5938`** — live native scrape/query plus positive and negative rule tests pass; no external notification delivery or production traffic is claimed |
+| Native trace extension | **CI-attested at `3da5938`** — loopback OTLP/HTTP capture of W3C CLIENT/SERVER spans and bounded approval events passes; no collector backend, retention, or production traffic is claimed |
+| Cloud/hybrid IaC reference | **CI-validated at `3da5938` / not deployed** — pinned OpenTofu and AWS-provider plans exercise a disabled zero-resource graph and an enabled private Fargate graph without AWS refresh or apply |
 
 ## Work not done
 
@@ -374,12 +374,12 @@ These boundaries remain open or deliberately out of scope.
 | Second-operator validation | **Unrun** | `docs/second-operator-protocol.md` is a script nobody has executed. |
 | CI container-proof run | **Per-commit evidence gate** | Treat the container path as attested only when the exact commit's Docker-capable Actions job is green and its uploaded receipt reports a pass. |
 | CI cloud-IaC proof run | **Per-commit validation gate** | The read-only job validates no-refresh/no-apply plans; its status is visible in Actions and cannot prove deployment or runtime behavior. |
-| Action-level deduplication | Implemented locally | Workflow approvals share a deterministic pair key, and the locked enterprise action store rejects a different-key duplicate pair with HTTP 409. Single-host fixture invariant only. |
-| Approval consumption and expiry | Implemented locally | `pending → approved → applied` or `expired`; applied/expired are terminal. |
+| Action-level deduplication | CI-attested at `3da5938` | Workflow approvals share a deterministic pair key, and the locked enterprise action store rejects a different-key duplicate pair with HTTP 409. Single-host fixture invariant only. |
+| Approval consumption and expiry | CI-attested at `3da5938` | `pending → approved → applied` or `expired`; applied/expired are terminal. |
 | Authenticated approval store | Not implemented | Plain JSON at `APPROVAL_STORE_PATH`; capability plaintext is not persisted. |
 | Enterprise-API-side audit | Partial request/conflict logging only | Direct requests have structured request logs and dedup conflicts add a bounded event with a key hash; there is no append-only action audit. |
 | External alert delivery | Not implemented | Prometheus loads and evaluates rules; no Alertmanager or pager is configured. |
-| OpenTelemetry traces | Implemented locally | Opt-in loopback OTLP/HTTP proof only. No collector backend, retention, or production traffic. |
+| OpenTelemetry traces | CI-attested at `3da5938` | Opt-in loopback OTLP/HTTP proof only. No collector backend, retention, or production traffic. |
 
 ### What production approval would require
 

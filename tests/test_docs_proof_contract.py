@@ -167,24 +167,17 @@ def test_docs_name_the_strong_native_supply_chain_and_trace_gates() -> None:
 
 
 def test_langgraph_stage1_public_ci_claim_stays_bounded() -> None:
-    """The exact public run attests only the synthetic exact-token proof."""
+    """The current exact public run attests only the synthetic exact-token proof."""
     readme = README.read_text(encoding="utf-8")
     proof = PROOF.read_text(encoding="utf-8")
 
     for path, text in (("README.md", readme), ("PROOF.md", proof)):
-        assert "31845098855" in text, f"{path} must cite the adopting public run"
-        assert "6a8c437" in text, f"{path} must bind Stage-1 to the adopting commit"
+        assert "31891411678" in text, f"{path} must cite the hardened public run"
+        assert "3da5938" in text, f"{path} must bind Stage-1 to the hardened commit"
         assert "exact keyword-token overlap" in text
         assert "in-script two-document fixture" in text
         assert "No vector store" in text or "no vector store" in text
         assert "scripts/agent-workflow-proof.py" in text
 
-        for line in text.splitlines():
-            if "31637042354" in line and ("LangGraph" in line or "Stage-1" in line):
-                assert "predate" in line.lower() or "does not attest" in line.lower(), (
-                    f"{path} must not treat run 31637042354 as Stage-1 evidence"
-                )
-
-    assert "Local-only until a green public CI run on the adopting commit" in proof
-    assert "run `31845098855` predates the provenance hardening" in proof
-    assert "does not attest it" in proof
+    assert "Local-only until a green public CI run on the adopting commit" not in proof
+    assert "predates the provenance hardening" not in proof
