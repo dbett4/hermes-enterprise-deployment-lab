@@ -187,12 +187,20 @@ REPLAY_HTTP="$(curl -sS -o "${WORK_DIR}/replayed.json" -w '%{http_code}' \
   -d "$ACTION_BODY")"
 test "$REPLAY_HTTP" = "200"
 
+CONFLICT_HTTP="$(curl -sS -o "${WORK_DIR}/conflict.json" -w '%{http_code}' \
+  -X POST "${API_URL}${ACTION_PATH}" \
+  -H "Authorization: Bearer ${WRITE_TOKEN}" \
+  -H "Idempotency-Key: telemetry-proof-conflict" \
+  -H "Content-Type: application/json" \
+  -d "$ACTION_BODY")"
+test "$CONFLICT_HTTP" = "409"
+
 POSTCOMMIT_HTTP="$(curl -sS -o "${WORK_DIR}/postcommit.json" -w '%{http_code}' \
   -X POST "${API_URL}${ACTION_PATH}?inject=error_after_commit" \
   -H "Authorization: Bearer ${WRITE_TOKEN}" \
   -H "Idempotency-Key: telemetry-proof-postcommit" \
   -H "Content-Type: application/json" \
-  -d "$ACTION_BODY")"
+  -d '{"action_id":"RB-PAY-GATEWAY-01-S3","note":"native telemetry proof"}')"
 test "$POSTCOMMIT_HTTP" = "500"
 
 TARGETS_JSON="${WORK_DIR}/targets.json"
@@ -330,7 +338,7 @@ outcomes = {
     series["metric"].get("outcome"): float(series["value"][1])
     for series in actions
 }
-for outcome in ("created", "replayed", "postcommit_error"):
+for outcome in ("created", "replayed", "conflict", "postcommit_error"):
     assert outcomes.get(outcome, 0) >= 1, outcomes
 
 receipt = {
@@ -362,5 +370,5 @@ receipt = {
 Path(receipt_path).write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
 PY
 
-printf 'TELEMETRY_PROOF_PASS prometheus=%s target=up alerts=5 outcomes=created,replayed,postcommit_error receipt=%s\n' \
+printf 'TELEMETRY_PROOF_PASS prometheus=%s target=up alerts=5 outcomes=created,replayed,conflict,postcommit_error receipt=%s\n' \
   "$PROMETHEUS_VERSION" "$RECEIPT_PATH"

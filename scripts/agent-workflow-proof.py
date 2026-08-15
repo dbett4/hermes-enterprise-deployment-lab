@@ -63,11 +63,14 @@ def main() -> int:
             "question": fixture["question"],
         }
     )
-    evaluation = evaluate_workflow_result(result)
+    evaluation = evaluate_workflow_result(
+        result, authoritative_documents=documents
+    )
     result_summary = {
         "status": result["status"],
         "citations": result["citations"],
         "actions": result["actions"],
+        "retrieved_action_provenance": result["retrieved_action_provenance"],
         "executed_actions": result["executed_actions"],
         "node_trace": result["node_trace"],
         "evaluation": evaluation,
@@ -80,6 +83,7 @@ def main() -> int:
         "evaluation_passed": evaluation["passed"],
         "node_trace": result["node_trace"],
         "citations": result["citations"],
+        "action_provenance_sha256": result["retrieved_action_provenance"],
         "executed_actions": result["executed_actions"],
         "hashes": {
             "input_sha256": _sha256(_canonical_bytes(fixture)),

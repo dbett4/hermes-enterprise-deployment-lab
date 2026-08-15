@@ -13,8 +13,8 @@ Control flow, in one place so it is auditable:
                           replay   -> replayed (no new side effect)
                           failure  -> error + resume instructions (same capability/key)
 
-The idempotency key is minted with the approval, not with the attempt, so a
-resume after a mid-flight failure reuses it automatically.
+The idempotency key is deterministically scoped to the incident/action pair, so
+a resume or a concurrent approval for the same action reuses it automatically.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from typing import Any
 
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
-from workflow_runner.approvals import ApprovalStore
+from workflow_runner.approvals import ApprovalStore, action_idempotency_key
 from workflow_runner.audit import AuditLog
 from workflow_runner.client import EnterpriseApiClient
 from workflow_runner.errors import WorkflowError, WorkflowErrorCode
@@ -43,9 +43,13 @@ APPLY_LIMITATIONS = [
     "Approval is granted through a separate local operator command with a recorded identity; "
     "the lab does not integrate a production identity provider or policy engine.",
     "The local JSON approval store uses single-host fcntl file locks; it is not a distributed production datastore.",
-    "A resume reuses the approval's idempotency key, so the API returns the original record.",
-    "Deduplication is keyed on the idempotency key, which is minted per approval: two approvals "
-    "for the same action_id produce two records.",
+    "A resume or concurrent approval for the same incident/action pair reuses its action-scoped "
+    "idempotency key, so the API returns the original record.",
+    "The workflow enforces approval before dispatch, while the API action store independently "
+    "enforces one record per incident/action pair. A direct write-token caller can bypass the "
+    "approval gate, but cannot create a second record for the same pair by choosing another key.",
+    "File-backed action-store operations re-read and validate the full fixture JSON under a "
+    "single-host lock; this is not a high-volume persistence design.",
 ]
 
 
@@ -228,12 +232,13 @@ def _apply_incident_action(
             }
         )
 
+    dispatch_idempotency_key = action_idempotency_key(incident_id, action_id)
     audit.append(
         "approval_capability_accepted",
         correlation_id=client.correlation_id,
         incident_id=incident_id,
         action_id=action_id,
-        idempotency_key=approval.idempotency_key,
+        idempotency_key=dispatch_idempotency_key,
         approval_id=approval.approval_id,
         approved_by=approval.approved_by,
         outcome="authorized",
@@ -243,7 +248,7 @@ def _apply_incident_action(
         correlation_id=client.correlation_id,
         incident_id=incident_id,
         action_id=action_id,
-        idempotency_key=approval.idempotency_key,
+        idempotency_key=dispatch_idempotency_key,
         outcome="dispatching",
         inject=inject,
     )
@@ -255,7 +260,7 @@ def _apply_incident_action(
         payload, call = client.apply_action(
             incident_id=incident_id,
             action_id=action_id,
-            idempotency_key=approval.idempotency_key,
+            idempotency_key=dispatch_idempotency_key,
             note=note,
             inject=inject,
         )
@@ -263,6 +268,79 @@ def _apply_incident_action(
     except WorkflowError as exc:
         if exc.call is not None:
             dependency_calls.append(exc.call)
+        conflict_code = exc.details.get("code")
+        existing_record_id = exc.details.get("existing_record_id")
+        if (
+            exc.code == WorkflowErrorCode.CONFLICT
+            and conflict_code == "incident_action_already_applied"
+            and isinstance(existing_record_id, str)
+            and existing_record_id
+        ):
+            approvals.record_attempt(
+                approval.approval_id,
+                "reconciled_existing",
+                {
+                    "record_id": existing_record_id,
+                    "correlation_id": exc.correlation_id,
+                },
+            )
+            approvals.mark_applied(approval.approval_id, existing_record_id)
+            audit.append(
+                "approval_rejected",
+                correlation_id=exc.correlation_id or client.correlation_id,
+                incident_id=incident_id,
+                action_id=action_id,
+                idempotency_key=dispatch_idempotency_key,
+                outcome="action_already_applied",
+                record_id=existing_record_id,
+            )
+            add_bounded_event(span, "mutation.conflict_reconciled")
+            return finish(
+                {
+                    "status": STATUS_APPROVAL_REJECTED,
+                    "incident_id": incident_id,
+                    "action_id": action_id,
+                    "correlation_id": exc.correlation_id or client.correlation_id,
+                    "side_effect": None,
+                    "reason": "action_already_applied",
+                    "existing_record_id": existing_record_id,
+                }
+            )
+        if exc.code == WorkflowErrorCode.CONFLICT:
+            approvals.record_attempt(
+                approval.approval_id,
+                "failed",
+                {
+                    "error_code": exc.code.value,
+                    "conflict_code": conflict_code,
+                    "correlation_id": exc.correlation_id,
+                },
+            )
+            audit.append(
+                "mutation_failed",
+                correlation_id=exc.correlation_id or client.correlation_id,
+                incident_id=incident_id,
+                action_id=action_id,
+                idempotency_key=dispatch_idempotency_key,
+                outcome="conflict",
+                error_code=exc.code.value,
+                conflict_code=conflict_code,
+                resumable=False,
+            )
+            add_bounded_event(span, "mutation.conflict_nonresumable")
+            span.set_status(Status(StatusCode.ERROR))
+            return finish(
+                {
+                    "status": STATUS_ERROR,
+                    "incident_id": incident_id,
+                    "action_id": action_id,
+                    "correlation_id": exc.correlation_id or client.correlation_id,
+                    "side_effect": None,
+                    "error": {"code": exc.code.value, "message": exc.message},
+                    "reason": conflict_code or "upstream_conflict",
+                    "resumable": False,
+                }
+            )
         approvals.record_attempt(
             approval.approval_id,
             "failed",
@@ -273,7 +351,7 @@ def _apply_incident_action(
             correlation_id=exc.correlation_id or client.correlation_id,
             incident_id=incident_id,
             action_id=action_id,
-            idempotency_key=approval.idempotency_key,
+            idempotency_key=dispatch_idempotency_key,
             outcome="failed",
             error_code=exc.code.value,
             resumable=True,
@@ -291,7 +369,7 @@ def _apply_incident_action(
                 "resume": {
                     "resumable": True,
                     "approval_id": approval.approval_id,
-                    "idempotency_key": approval.idempotency_key,
+                    "idempotency_key": dispatch_idempotency_key,
                     "instruction": (
                         "Re-invoke with the same approval_capability. The idempotency key is "
                         "replayed, so if the write already committed no second side "
@@ -314,7 +392,7 @@ def _apply_incident_action(
         correlation_id=client.correlation_id,
         incident_id=incident_id,
         action_id=action_id,
-        idempotency_key=approval.idempotency_key,
+        idempotency_key=dispatch_idempotency_key,
         outcome="replayed" if replayed else "committed",
         record_id=record.get("record_id"),
         total_actions_for_incident=payload.get("total_actions_for_incident"),
@@ -330,7 +408,7 @@ def _apply_incident_action(
             "correlation_id": client.correlation_id,
             "side_effect": record,
             "replayed": replayed,
-            "idempotency_key": approval.idempotency_key,
+            "idempotency_key": dispatch_idempotency_key,
             "total_actions_for_incident": payload.get("total_actions_for_incident"),
         }
     )

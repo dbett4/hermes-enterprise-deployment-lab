@@ -178,10 +178,13 @@ def test_langgraph_stage1_public_ci_claim_stays_bounded() -> None:
         assert "in-script two-document fixture" in text
         assert "No vector store" in text or "no vector store" in text
         assert "scripts/agent-workflow-proof.py" in text
-        assert "local only until a green public CI run on the adopting commit" not in text
 
         for line in text.splitlines():
             if "31637042354" in line and ("LangGraph" in line or "Stage-1" in line):
                 assert "predate" in line.lower() or "does not attest" in line.lower(), (
                     f"{path} must not treat run 31637042354 as Stage-1 evidence"
                 )
+
+    assert "Local-only until a green public CI run on the adopting commit" in proof
+    assert "run `31845098855` predates the provenance hardening" in proof
+    assert "does not attest it" in proof

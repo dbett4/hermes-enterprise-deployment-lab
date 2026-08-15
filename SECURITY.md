@@ -95,8 +95,16 @@ The remaining weaknesses are straightforward:
 - Approval lifecycle is local. `pending`, `approved`, `applied`, and
   `expired` are enforced, but by a JSON file and an in-process lock rather than a
   transactional authorization service.
-- **Deduplication is per approval, not per action.** Two approvals for the same
-  `action_id` carry two idempotency keys and produce two records.
+- **Action-level deduplication is enforced in both layers.** Approvals for the
+  same incident/action pair share one deterministic idempotency key, and a
+  later approved capability rejects before dispatch. The locked enterprise
+  action store independently permits at most one record per pair; a direct
+  caller using another key receives HTTP 409.
+  Dispatch re-derives the pair key, so a persisted pre-upgrade random key cannot
+  split the deduplication boundary during an upgrade.
+- A persisted duplicate pair from before this invariant fails closed on load.
+  The file must be preserved and reconciled or quarantined before restart. This
+  remains a single-host fixture, not a distributed exactly-once system.
 
 ## Tool-surface scoping
 

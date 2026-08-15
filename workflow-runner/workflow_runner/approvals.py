@@ -7,10 +7,10 @@ is persisted. The capability is bound to one incident/action pair, expires, and
 becomes terminal after a confirmed apply.
 
 An approved capability intentionally remains usable after an ambiguous failed
-attempt. The downstream idempotency key belongs to the approval, so a retry
-after a post-commit 5xx safely observes a replay. Once that replay (or an
-ordinary success) is observed, the approval is marked ``applied`` and cannot
-dispatch another request.
+attempt. The downstream idempotency key belongs to the incident/action pair, so
+a retry or a concurrent approval for that same pair reaches the same downstream
+deduplication boundary. Once a replay (or ordinary success) is observed, the
+approval is marked ``applied`` and cannot dispatch another request.
 
 This is a portfolio-lab control backed by one local JSON file. Concurrent
 writers on a single Linux host are serialized with a separate stable lock file
@@ -29,7 +29,6 @@ import json
 import os
 import secrets
 import threading
-import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -80,6 +79,15 @@ def _parse(value: str) -> datetime:
 
 def _capability_hash(capability: str) -> str:
     return hashlib.sha256(capability.encode("utf-8")).hexdigest()
+
+
+def action_idempotency_key(incident_id: str, action_id: str) -> str:
+    payload = json.dumps(
+        {"action_id": action_id, "incident_id": incident_id},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"idem-action-{hashlib.sha256(payload).hexdigest()}"
 
 
 def _validate_approval_entry(approval_id: str, raw: Any, *, path: Path) -> dict[str, Any]:
@@ -267,7 +275,7 @@ class ApprovalStore:
             approval_id=f"apr_{secrets.token_urlsafe(18)}",
             incident_id=incident_id,
             action_id=action_id,
-            idempotency_key=f"idem-{uuid.uuid4()}",
+            idempotency_key=action_idempotency_key(incident_id, action_id),
             requested_at=_iso(requested_at),
             expires_at=_iso(requested_at + timedelta(seconds=self.ttl_seconds)),
             correlation_id=correlation_id,
@@ -393,6 +401,14 @@ class ApprovalStore:
                     return None, "approval_capability_bound_to_different_incident"
                 if raw["action_id"] != action_id:
                     return None, "approval_capability_bound_to_different_action"
+                if any(
+                    other_id != approval_id
+                    and other.get("status") == "applied"
+                    and other.get("incident_id") == incident_id
+                    and other.get("action_id") == action_id
+                    for other_id, other in data.items()
+                ):
+                    return None, "action_already_applied"
                 return self._request_from_entry(raw), None
 
     def record_attempt(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from typing import Any
 
@@ -14,10 +16,11 @@ from app.config import settings
 from app.fixtures import INCIDENTS, RUNBOOKS
 from app.middleware import CorrelationAndLoggingMiddleware
 from app.metrics import observe_action_outcome, render_metrics
-from app.store import ACTION_STORE
+from app.store import ACTION_STORE, ActionConflictError
 from app.tracing import configure_tracing, shutdown_tracing
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger("enterprise-api")
 
 _ready = False
 
@@ -140,13 +143,40 @@ async def apply_incident_action(
         )
 
     correlation_id = getattr(request.state, "correlation_id", "unknown")
-    record, created = ACTION_STORE.commit(
-        incident_id=incident_id,
-        action_id=payload.action_id,
-        idempotency_key=idempotency_key,
-        correlation_id=correlation_id,
-        note=payload.note,
-    )
+    try:
+        record, created = ACTION_STORE.commit(
+            incident_id=incident_id,
+            action_id=payload.action_id,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            note=payload.note,
+        )
+    except ActionConflictError as exc:
+        existing_record_id = exc.existing_record["record_id"]
+        logger.warning(
+            json.dumps(
+                {
+                    "service": "enterprise-api",
+                    "event": "action_dedup_conflict",
+                    "conflict_code": exc.code,
+                    "incident_id": incident_id,
+                    "action_id": payload.action_id,
+                    "correlation_id": correlation_id,
+                    "presented_key_sha256": hashlib.sha256(
+                        idempotency_key.encode("utf-8")
+                    ).hexdigest(),
+                    "existing_record_id": existing_record_id,
+                }
+            )
+        )
+        observe_action_outcome("conflict")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": exc.code,
+                "existing_record_id": existing_record_id,
+            },
+        ) from None
 
     # Post-commit fault: the side effect exists but the caller sees a 5xx.
     if mode == "error_after_commit":

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from workflow_runner.models import DependencyCall
@@ -14,6 +14,7 @@ class WorkflowErrorCode(str, Enum):
     MALFORMED_RESPONSE = "malformed_response"
     UPSTREAM_5XX = "upstream_5xx"
     BAD_REQUEST = "bad_request"
+    CONFLICT = "conflict"
     UNKNOWN = "unknown"
 
 
@@ -24,6 +25,7 @@ class WorkflowError(Exception):
         message: str,
         correlation_id: str | None = None,
         call: "DependencyCall | None" = None,
+        details: dict[str, Any] | None = None,
     ):
         super().__init__(message)
         self.code = code
@@ -32,3 +34,4 @@ class WorkflowError(Exception):
         # Dependency-call evidence for the request that failed. Carrying it on the
         # exception lets callers audit failed attempts, not just successful ones.
         self.call = call
+        self.details = details or {}

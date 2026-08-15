@@ -143,14 +143,28 @@ approval becomes `applied`; any further use is refused before dispatch.
 
 ## Idempotency and resume
 
-The idempotency key is minted **with the approval**, not with the attempt, so a
-resume reuses it automatically.
+The idempotency key is derived from the **incident/action pair**, not from an
+approval or attempt. A resume and distinct concurrent approvals for the same
+pair therefore converge on the same downstream deduplication boundary. The
+executor re-derives this key at dispatch rather than trusting a persisted
+approval field, including for approvals created under the older random-key
+format.
 
 | Situation | Result |
 |---|---|
 | First approved call | `applied`, `replayed: false`, one record created |
 | Same capability after a confirmed apply | `approval_rejected`, no request dispatched |
+| Distinct approval after the pair was applied | `approval_rejected`, no request dispatched |
+| Concurrent distinct approvals for one pair | Same idempotency key; downstream store creates one record and reports replay for the duplicate |
+| Direct caller submits the pair under another key | HTTP 409 with the existing record ID; no second record |
+| One key is reused for a different pair | HTTP 409 binding conflict; no misleading replay |
+| Approved workflow discovers a direct caller already applied the pair | Reconciles the existing record ID, marks the capability terminal, and returns `approval_rejected` without resume instructions |
+| Workflow receives a key-binding conflict | Fails closed as non-resumable; approval remains available for explicit datastore remediation, not automatic retry |
 | Failure after commit, then resume | `error` with resume instructions, then `replayed: true`; store count stays 1 |
+
+The file-backed store reloads under the same host lock before committing. A
+pre-upgrade file containing duplicate incident/action pairs fails closed on
+load; preserve and reconcile or quarantine that fixture file before restart.
 
 ## Failure injection
 
@@ -179,7 +193,9 @@ are configuration rather than a tool argument an agent could set.
   `mutation_failed`, `run_finished`.
 - Structured JSON logs on the API include `service`, route template, `status`,
   `correlation_id`, `elapsed_ms`, and when tracing is on, `trace_id` and
-  `span_id`. Secret-bearing headers are not logged.
+  `span_id`. Dedup conflicts add a bounded event with the conflict code,
+  existing record ID, and SHA-256 of the presented key; raw keys and other
+  secret-bearing headers are not logged.
 
 ## Metrics, SLOs, and alerts
 
@@ -189,7 +205,7 @@ Compose publishes the API only on loopback in this lab; a real shared network
 would need an authenticated or network-restricted metrics boundary. Request
 counters and latency histograms use HTTP method, route **template**, and status
 class labels; incident IDs are deliberately excluded. Mutation outcomes
-distinguish `created`, `replayed`, and `postcommit_error`.
+distinguish `created`, `replayed`, `conflict`, and `postcommit_error`.
 
 Prometheus evaluates 99% availability and 95%-under-500-ms latency objectives
 with fast (1h/5m) and slow (6h/30m) multi-window burn alerts. A separate

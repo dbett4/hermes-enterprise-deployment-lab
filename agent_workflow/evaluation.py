@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Iterable
 from typing import Any
 
 # Graph statuses only. This evaluator is a Stage-1 regression check, not
@@ -7,12 +10,30 @@ from typing import Any
 EMITTED_STATUSES = frozenset({"ready_for_review", "blocked_missing_evidence"})
 
 
-def evaluate_workflow_result(result: dict[str, Any]) -> dict[str, Any]:
+def action_provenance_sha256(document_id: Any, action: dict[str, Any]) -> str:
+    """Fingerprint the authoritative document/action fields used for grounding."""
+    payload = {
+        "action_id": str(action.get("action_id")),
+        "consequential": action.get("consequential"),
+        "description": str(action.get("description")),
+        "document_id": document_id,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def evaluate_workflow_result(
+    result: dict[str, Any],
+    *,
+    authoritative_documents: Iterable[Any] | None = None,
+) -> dict[str, Any]:
     """Regression-check Stage-1 graph output.
 
     A pass means this synthetic graph still emits internally consistent review
-    artifacts. It is not authentication, not authorization, and not a
-    production mutation gate.
+    artifacts grounded against a separately supplied authoritative document
+    set. Without that external input, provenance verification fails closed. It
+    is not authentication, not authorization, and not a production mutation
+    gate.
 
     Invariant: ``blocked_missing_evidence`` requires empty
     ``retrieved_document_ids``, ``citations``, and ``actions``.
@@ -21,6 +42,48 @@ def evaluate_workflow_result(result: dict[str, Any]) -> dict[str, Any]:
     citations = list(result.get("citations", []))
     actions = list(result.get("actions", []))
     violations: list[str] = []
+
+    authoritative_actions: dict[Any, set[str]] = {}
+    if authoritative_documents is None:
+        violations.append("provenance_not_independently_verifiable")
+    else:
+        for document in authoritative_documents:
+            document_id = document.document_id
+            if document_id in authoritative_actions:
+                violations.append(f"duplicate_authoritative_document:{document_id}")
+                continue
+            authoritative_actions[document_id] = {
+                action_provenance_sha256(document_id, action)
+                for action in document.actions
+            }
+
+    raw_provenance = result.get("retrieved_action_provenance")
+    provenance: set[str] = set()
+    if not isinstance(raw_provenance, list):
+        violations.append("missing_retrieved_action_provenance")
+    else:
+        for digest in raw_provenance:
+            if not (
+                isinstance(digest, str)
+                and len(digest) == 64
+                and all(character in "0123456789abcdef" for character in digest)
+            ):
+                violations.append("malformed_retrieved_action_provenance")
+                continue
+            if digest in provenance:
+                violations.append(f"duplicate_action_provenance:{digest}")
+            provenance.add(digest)
+
+    if authoritative_documents is not None:
+        for document_id in retrieved - authoritative_actions.keys():
+            violations.append(f"retrieved_document_not_authoritative:{document_id}")
+        expected_provenance = {
+            digest
+            for document_id in retrieved
+            for digest in authoritative_actions.get(document_id, set())
+        }
+        if provenance != expected_provenance:
+            violations.append("retrieved_action_provenance_not_authoritative")
 
     status = result.get("status")
     if status not in EMITTED_STATUSES:
@@ -57,10 +120,20 @@ def evaluate_workflow_result(result: dict[str, Any]) -> dict[str, Any]:
             seen_action_ids.add(raw_action_id)
             action_id = raw_action_id
         citation_id = action.get("citation_id")
-        if citation_id in retrieved:
+        try:
+            action_provenance = action_provenance_sha256(citation_id, action)
+        except (TypeError, ValueError):
+            action_provenance = None
+        independently_grounded = (
+            authoritative_documents is not None
+            and action_provenance in authoritative_actions.get(citation_id, set())
+        )
+        if citation_id in retrieved and independently_grounded:
             grounded_count += 1
         else:
             violations.append(f"action_not_grounded:{action_id}")
+            if citation_id in retrieved:
+                violations.append(f"action_provenance_mismatch:{action_id}")
         if not isinstance(action.get("consequential"), bool):
             violations.append(f"action_missing_authoritative_consequential:{action_id}")
         elif action["consequential"] is True and action_id != "unknown":

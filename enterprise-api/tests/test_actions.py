@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -57,6 +59,45 @@ def test_distinct_keys_create_distinct_records(client: TestClient) -> None:
     client.post(PATH, json=_body(), headers={**WRITE, "Idempotency-Key": "k-1"})
     client.post(PATH, json=_body("RB-PAY-GATEWAY-01-S3"), headers={**WRITE, "Idempotency-Key": "k-2"})
     assert len(ACTION_STORE.all_records()) == 2
+
+
+def test_direct_write_cannot_rekey_an_applied_incident_action(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    first = client.post(PATH, json=_body(), headers={**WRITE, "Idempotency-Key": "k-first"})
+    conflict = client.post(
+        PATH,
+        json=_body(),
+        headers={**WRITE, "Idempotency-Key": "k-different"},
+    )
+
+    assert first.status_code == 201
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == {
+        "code": "incident_action_already_applied",
+        "existing_record_id": first.json()["record"]["record_id"],
+    }
+    assert len(ACTION_STORE.all_records()) == 1
+    assert '"event": "action_dedup_conflict"' in caplog.text
+    assert hashlib.sha256(b"k-different").hexdigest() in caplog.text
+    assert "k-different" not in caplog.text
+
+
+def test_idempotency_key_cannot_replay_a_different_action(client: TestClient) -> None:
+    first = client.post(PATH, json=_body(), headers={**WRITE, "Idempotency-Key": "k-bound"})
+    conflict = client.post(
+        PATH,
+        json=_body("RB-PAY-GATEWAY-01-S3"),
+        headers={**WRITE, "Idempotency-Key": "k-bound"},
+    )
+
+    assert first.status_code == 201
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == {
+        "code": "idempotency_key_binding_conflict",
+        "existing_record_id": first.json()["record"]["record_id"],
+    }
+    assert len(ACTION_STORE.all_records()) == 1
 
 
 def test_precommit_failure_injection_persists_nothing(client: TestClient) -> None:

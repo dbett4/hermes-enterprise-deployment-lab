@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import multiprocessing as mp
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from app.store import ActionStore
+from app.store import ActionStore, IncidentActionAlreadyAppliedError
 
 
 _MP_TIMEOUT_SECONDS = 30
@@ -19,28 +21,43 @@ def _action_commit_worker(
     idempotency_key: str,
     barrier: mp.Barrier,
     result_queue: mp.Queue,
+    incident_id: str = "INC-2026-0042",
+    action_id: str = "RB-PAY-GATEWAY-01-S2",
 ) -> None:
     from app.store import ActionStore as Store
+    from app.store import IncidentActionAlreadyAppliedError as PairConflict
 
     store = Store(path=path)
     barrier.wait(timeout=_MP_TIMEOUT_SECONDS)
-    record, created = store.commit(
-        incident_id="INC-2026-0042",
-        action_id="RB-PAY-GATEWAY-01-S2",
-        idempotency_key=idempotency_key,
-        correlation_id=f"c-{idempotency_key}",
-    )
+    try:
+        record, created = store.commit(
+            incident_id=incident_id,
+            action_id=action_id,
+            idempotency_key=idempotency_key,
+            correlation_id=f"c-{idempotency_key}",
+        )
+    except PairConflict as exc:
+        result_queue.put(
+            {
+                "key": idempotency_key,
+                "created": None,
+                "conflict": True,
+                "record_id": exc.existing_record["record_id"],
+            }
+        )
+        return
     result_queue.put(
         {
             "key": idempotency_key,
             "created": created,
+            "conflict": False,
             "record_id": record["record_id"],
             "sequence": record["sequence"],
         }
     )
 
 
-def _join_workers(workers: list[mp.Process], *, timeout: float = _MP_TIMEOUT_SECONDS) -> None:
+def _join_workers(workers: Sequence[Any], *, timeout: float = _MP_TIMEOUT_SECONDS) -> None:
     for worker in workers:
         worker.join(timeout=timeout)
     still_alive = [worker for worker in workers if worker.is_alive()]
@@ -269,8 +286,51 @@ def test_failed_reset_preserves_memory_and_durable_state(
     assert reloaded.get_by_key("k-reset-failure") == original
 
 
+def test_same_pair_with_different_key_raises_conflict(tmp_path: Path) -> None:
+    store = ActionStore(path=tmp_path / "actions.json")
+    existing, _ = store.commit(
+        incident_id="INC-2026-0042",
+        action_id="RB-PAY-GATEWAY-01-S2",
+        idempotency_key="k-first",
+        correlation_id="c-first",
+    )
+
+    with pytest.raises(IncidentActionAlreadyAppliedError) as raised:
+        store.commit(
+            incident_id="INC-2026-0042",
+            action_id="RB-PAY-GATEWAY-01-S2",
+            idempotency_key="k-different",
+            correlation_id="c-different",
+        )
+
+    assert raised.value.existing_record["record_id"] == existing["record_id"]
+    assert len(store.all_records()) == 1
+
+
+def test_duplicate_incident_action_pair_fails_closed_on_load(tmp_path: Path) -> None:
+    path = tmp_path / "actions.json"
+    path.write_text(
+        json.dumps(
+            {
+                "records": [
+                    _persisted_record(),
+                    _persisted_record(
+                        record_id="ACT-duplicate-pair",
+                        idempotency_key="k-other",
+                        sequence=2,
+                    ),
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate incident/action pair"):
+        ActionStore(path=path)
+
+
 def test_multiprocess_distinct_keys_retain_every_record(tmp_path: Path) -> None:
-    """Independent processes must not lose distinct commits to one file."""
+    """Independent processes must not lose distinct pair commits to one file."""
     path = tmp_path / "actions.json"
     worker_count = 8
     ctx = mp.get_context("fork")
@@ -279,7 +339,14 @@ def test_multiprocess_distinct_keys_retain_every_record(tmp_path: Path) -> None:
     workers = [
         ctx.Process(
             target=_action_commit_worker,
-            args=(str(path), f"k-mp-{index}", barrier, result_queue),
+            args=(
+                str(path),
+                f"k-mp-{index}",
+                barrier,
+                result_queue,
+                f"INC-2026-{index:04d}",
+                f"RB-ACTION-{index}",
+            ),
         )
         for index in range(worker_count)
     ]
@@ -300,6 +367,30 @@ def test_multiprocess_distinct_keys_retain_every_record(tmp_path: Path) -> None:
     assert sorted(sequences) == list(range(1, worker_count + 1))
     assert len(set(sequences)) == worker_count
     assert len({record["record_id"] for record in records}) == worker_count
+
+
+def test_multiprocess_same_pair_distinct_keys_single_record(tmp_path: Path) -> None:
+    """Distinct keys cannot bypass pair uniqueness across processes."""
+    path = tmp_path / "actions.json"
+    ctx = mp.get_context("fork")
+    barrier = ctx.Barrier(2)
+    result_queue: mp.Queue = ctx.Queue()
+    workers = [
+        ctx.Process(
+            target=_action_commit_worker,
+            args=(str(path), f"k-pair-{index}", barrier, result_queue),
+        )
+        for index in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    _join_workers(workers)
+
+    outcomes = [result_queue.get(timeout=1) for _ in workers]
+    assert [item["created"] for item in outcomes].count(True) == 1
+    assert [item["conflict"] for item in outcomes].count(True) == 1
+    assert len({item["record_id"] for item in outcomes}) == 1
+    assert len(ActionStore(path=path).all_records()) == 1
 
 
 def test_multiprocess_same_key_single_created_winner(tmp_path: Path) -> None:

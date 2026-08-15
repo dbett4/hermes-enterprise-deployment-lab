@@ -151,8 +151,17 @@ the tools; `scripts/*.sh` and `pytest` call them.
 - The `.jsonl` audit log has no signature, chain hash, or WORM storage.
   `run_started` and `run_finished` have a null correlation ID. The API has no
   audit log of its own, so direct API writes do not appear here.
-- Deduplication is per approval, not per action. Two approvals for the same
-  `action_id` have different idempotency keys and create two records.
+- The workflow derives one idempotency key per incident/action pair and rejects
+  a later approved capability after that pair is applied. Concurrent approvals
+  still converge on the same downstream key. The enterprise action store also
+  enforces one record per pair for direct write-token callers: a different key
+  receives HTTP 409 rather than a silent replay or second record.
+  Dispatch re-derives the current pair key instead of trusting the persisted
+  approval field, so pending approvals from the older random-key format also
+  converge after an upgrade.
+- Existing file-backed stores containing duplicate pairs fail closed on load.
+  Preserve and reconcile or quarantine that fixture JSON before restart; the
+  API cannot start merely to call its reset endpoint while the file is invalid.
 - The server's allowlist is tested. Hermes's own `tools.include` behavior is
   not. On 2026-08-01, narrowing that list still made `hermes mcp test` print all
   three server-advertised tools.
@@ -365,10 +374,10 @@ These boundaries remain open or deliberately out of scope.
 | Second-operator validation | **Unrun** | `docs/second-operator-protocol.md` is a script nobody has executed. |
 | CI container-proof run | **Per-commit evidence gate** | Treat the container path as attested only when the exact commit's Docker-capable Actions job is green and its uploaded receipt reports a pass. |
 | CI cloud-IaC proof run | **Per-commit validation gate** | The read-only job validates no-refresh/no-apply plans; its status is visible in Actions and cannot prove deployment or runtime behavior. |
-| Action-level deduplication | Not implemented | "Exactly once" is per approval, not per action. |
+| Action-level deduplication | Implemented locally | Workflow approvals share a deterministic pair key, and the locked enterprise action store rejects a different-key duplicate pair with HTTP 409. Single-host fixture invariant only. |
 | Approval consumption and expiry | Implemented locally | `pending → approved → applied` or `expired`; applied/expired are terminal. |
 | Authenticated approval store | Not implemented | Plain JSON at `APPROVAL_STORE_PATH`; capability plaintext is not persisted. |
-| Enterprise-API-side audit | Not implemented | A direct write to the API leaves no trace. |
+| Enterprise-API-side audit | Partial request/conflict logging only | Direct requests have structured request logs and dedup conflicts add a bounded event with a key hash; there is no append-only action audit. |
 | External alert delivery | Not implemented | Prometheus loads and evaluates rules; no Alertmanager or pager is configured. |
 | OpenTelemetry traces | Implemented locally | Opt-in loopback OTLP/HTTP proof only. No collector backend, retention, or production traffic. |
 

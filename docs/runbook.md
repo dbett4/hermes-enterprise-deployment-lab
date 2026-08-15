@@ -109,8 +109,8 @@ python3 -m json.tool .telemetry-proof/receipt.json
 ```
 
 The proof must report target `up`, five loaded alerts, positive firing fixtures
-for all five, the idle-latency negative control, and `created`, `replayed`, and
-`postcommit_error` outcomes. It chooses temporary native ports and removes its
+for all five, the idle-latency negative control, and `created`, `replayed`,
+`conflict`, and `postcommit_error` outcomes. It chooses temporary native ports and removes its
 processes. Compose publishes Prometheus on `${PROMETHEUS_PORT:-9090}`;
 `container-proof.sh` chooses a free host port automatically.
 
@@ -222,11 +222,32 @@ curl -s -H "$AUTHORIZATION_HEADER" \
 
 ### Resetting the fixture store
 
+This endpoint works only after the API has successfully loaded its configured
+store:
+
 ```bash
-AUTHORIZATION_HEADER="Authorization: Bearer <fixture-token>" # gitleaks:allow -- documented placeholder
+AUTHORIZATION_HEADER="Authorization: Bearer <write-token>" # gitleaks:allow -- documented placeholder
 curl -X POST -H "$AUTHORIZATION_HEADER" \
   http://127.0.0.1:8080/v1/admin/reset-actions
 ```
+
+### API will not start because `ACTION_STORE_PATH` is invalid
+
+The store intentionally fails closed when its JSON is malformed, has invalid
+record fields, repeats an idempotency key, or contains more than one record for
+an incident/action pair. Because the store loads during module import, the API
+and `/v1/admin/reset-actions` are unavailable in this state.
+
+1. Stop the API and preserve a copy of the file named by `ACTION_STORE_PATH` as
+   evidence. Do not edit the only copy.
+2. Inspect and reconcile the duplicate/corrupt fixture records offline, or move
+   the invalid file aside if discarding fixture state is explicitly acceptable.
+3. Start the API and confirm `/readyz` before issuing any mutation.
+4. Re-run the persistence and aggregate proof gates.
+
+The file-backed store reads and validates the complete JSON under a single-host
+lock on each operation. This is acceptable for the small fixture and is not a
+high-volume recovery or production persistence mechanism.
 
 ### Injected failures during drills
 

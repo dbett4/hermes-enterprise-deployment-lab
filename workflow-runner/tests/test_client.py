@@ -10,7 +10,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import SpanKind
 
 from workflow_runner.client import EnterpriseApiClient
-from workflow_runner.errors import WorkflowErrorCode
+from workflow_runner.errors import WorkflowError, WorkflowErrorCode
 from workflow_runner.planner import run_incident_intake
 from workflow_runner.tracing import configure_tracing, flush_tracing, reset_tracing_for_tests, shutdown_tracing
 
@@ -109,6 +109,39 @@ def test_upstream_5xx() -> None:
 
     assert receipt.outcome == "error"
     assert receipt.error["code"] == WorkflowErrorCode.UPSTREAM_5XX.value
+
+
+def test_action_conflict_preserves_only_bounded_reconciliation_details() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _json_response(
+            409,
+            {
+                "detail": {
+                    "code": "incident_action_already_applied",
+                    "existing_record_id": "ACT-existing",
+                    "untrusted": "discard-me",
+                }
+            },
+        )
+
+    client = EnterpriseApiClient(
+        "http://enterprise-api:8080",
+        "lab-write-token",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(WorkflowError) as raised:
+        client.apply_action(
+            incident_id="INC-2026-0042",
+            action_id="RB-PAY-GATEWAY-01-S2",
+            idempotency_key="idem-action-test",
+        )
+
+    assert raised.value.code == WorkflowErrorCode.CONFLICT
+    assert raised.value.details == {
+        "code": "incident_action_already_applied",
+        "existing_record_id": "ACT-existing",
+    }
 
 
 def test_malformed_response() -> None:

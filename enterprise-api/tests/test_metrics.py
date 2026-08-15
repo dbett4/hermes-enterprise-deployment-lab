@@ -58,7 +58,7 @@ def test_metrics_scrape_uses_route_templates_and_records_success(client: TestCli
     assert INCIDENT not in after.text
 
 
-def test_action_metrics_distinguish_created_replayed_and_postcommit_error(
+def test_action_metrics_distinguish_created_replayed_conflict_and_postcommit_error(
     client: TestClient,
 ) -> None:
     ACTION_STORE.reset()
@@ -76,18 +76,24 @@ def test_action_metrics_distinguish_created_replayed_and_postcommit_error(
             json=body,
             headers={**WRITE, "Idempotency-Key": "metrics-created"},
         )
+        conflict = client.post(
+            ACTION_PATH,
+            json=body,
+            headers={**WRITE, "Idempotency-Key": "metrics-conflict"},
+        )
         postcommit_error = client.post(
             f"{ACTION_PATH}?inject=error_after_commit",
-            json=body,
+            json={"action_id": "RB-PAY-GATEWAY-01-S3", "note": "metrics test"},
             headers={**WRITE, "Idempotency-Key": "metrics-postcommit"},
         )
 
         assert created.status_code == 201
         assert replayed.status_code == 200
+        assert conflict.status_code == 409
         assert postcommit_error.status_code == 500
 
         after = client.get("/metrics").text
-        for outcome in ("created", "replayed", "postcommit_error"):
+        for outcome in ("created", "replayed", "conflict", "postcommit_error"):
             labels = {"outcome": outcome}
             assert _sample_value(
                 after,

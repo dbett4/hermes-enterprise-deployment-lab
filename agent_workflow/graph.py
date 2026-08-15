@@ -5,6 +5,7 @@ from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from agent_workflow.evaluation import action_provenance_sha256
 from agent_workflow.retrieval import KeywordRetriever, RunbookDocument
 
 
@@ -13,6 +14,7 @@ class IncidentGraphState(TypedDict, total=False):
     question: str
     retrieved_documents: list[RunbookDocument]
     retrieved_document_ids: list[str]
+    retrieved_action_provenance: list[str]
     actions: list[dict[str, Any]]
     consequential_action_ids: list[str]
     citations: list[str]
@@ -29,6 +31,11 @@ def build_incident_graph(retriever: KeywordRetriever):
         return {
             "retrieved_documents": documents,
             "retrieved_document_ids": [document.document_id for document in documents],
+            "retrieved_action_provenance": [
+                action_provenance_sha256(document.document_id, action)
+                for document in documents
+                for action in document.actions
+            ],
             "node_trace": ["retrieve"],
         }
 

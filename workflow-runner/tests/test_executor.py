@@ -7,6 +7,8 @@ against observed traffic rather than against the return value's own claim.
 from __future__ import annotations
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -209,6 +211,214 @@ def test_approved_call_writes_once_and_replays_thereafter(api: RecordingApi, tmp
     kinds = [event["event"] for event in audit.read_events()]
     assert kinds.count("mutation_committed") == 1
     assert kinds.count("mutation_replayed") == 0
+
+
+def test_two_distinct_approvals_for_same_action_create_only_one_record(
+    api: RecordingApi, tmp_path: Path
+) -> None:
+    approvals, audit = _stores(tmp_path)
+    first_pending = apply_incident_action(
+        _client(api),
+        "INC-2026-0042",
+        "RB-PAY-GATEWAY-01-S2",
+        approvals=approvals,
+        audit=audit,
+    )
+    first_capability = _grant(approvals, first_pending["approval_id"])
+
+    second_pending = apply_incident_action(
+        _client(api),
+        "INC-2026-0042",
+        "RB-PAY-GATEWAY-01-S2",
+        approvals=approvals,
+        audit=audit,
+    )
+    second_capability = _grant(approvals, second_pending["approval_id"])
+
+    first = apply_incident_action(
+        _client(api),
+        "INC-2026-0042",
+        "RB-PAY-GATEWAY-01-S2",
+        approval_capability=first_capability,
+        approvals=approvals,
+        audit=audit,
+    )
+    assert first["status"] == "applied"
+
+    second = apply_incident_action(
+        _client(api),
+        "INC-2026-0042",
+        "RB-PAY-GATEWAY-01-S2",
+        approval_capability=second_capability,
+        approvals=approvals,
+        audit=audit,
+    )
+
+    assert second["status"] == "approval_rejected"
+    assert second["reason"] == "action_already_applied"
+    assert len(api.posts) == 1
+    assert len(api.records) == 1
+
+
+def test_legacy_approval_uses_current_action_scoped_key_at_dispatch(
+    api: RecordingApi, tmp_path: Path
+) -> None:
+    approvals, audit = _stores(tmp_path)
+    legacy = approvals.request("INC-2026-0042", "RB-PAY-GATEWAY-01-S2")
+    persisted = json.loads(approvals.path.read_text(encoding="utf-8"))
+    persisted[legacy.approval_id]["idempotency_key"] = "idem-legacy-random-key"
+    approvals.path.write_text(json.dumps(persisted), encoding="utf-8")
+    capability = _grant(approvals, legacy.approval_id)
+    current = approvals.request("INC-2026-0042", "RB-PAY-GATEWAY-01-S2")
+
+    applied = apply_incident_action(
+        _client(api),
+        "INC-2026-0042",
+        "RB-PAY-GATEWAY-01-S2",
+        approval_capability=capability,
+        approvals=approvals,
+        audit=audit,
+    )
+
+    assert applied["status"] == "applied"
+    assert applied["side_effect"]["idempotency_key"] == current.idempotency_key
+    assert applied["side_effect"]["idempotency_key"] != "idem-legacy-random-key"
+
+
+def test_concurrent_distinct_approvals_converge_on_one_side_effect(
+    api: RecordingApi, tmp_path: Path
+) -> None:
+    approvals, audit = _stores(tmp_path)
+    first = approvals.request("INC-2026-0042", "RB-PAY-GATEWAY-01-S2")
+    second = approvals.request("INC-2026-0042", "RB-PAY-GATEWAY-01-S2")
+    first_capability = _grant(approvals, first.approval_id)
+    second_capability = _grant(approvals, second.approval_id)
+    post_barrier = threading.Barrier(2)
+    original_handler = api.handler
+
+    def concurrent_handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            post_barrier.wait(timeout=10)
+        return original_handler(request)
+
+    def apply(capability: str) -> dict[str, Any]:
+        client = EnterpriseApiClient(
+            base_url="http://enterprise-api:8080",
+            token="lab-write-token",
+            transport=httpx.MockTransport(concurrent_handler),
+        )
+        return apply_incident_action(
+            client,
+            "INC-2026-0042",
+            "RB-PAY-GATEWAY-01-S2",
+            approval_capability=capability,
+            approvals=approvals,
+            audit=audit,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(apply, [first_capability, second_capability]))
+
+    assert sorted(result["status"] for result in results) == ["applied", "replayed"]
+    assert len(api.posts) == 2
+    assert len(api.records) == 1
+    assert len({result["side_effect"]["record_id"] for result in results}) == 1
+
+
+def test_upstream_existing_action_conflict_terminates_capability(
+    tmp_path: Path,
+) -> None:
+    approvals, audit = _stores(tmp_path)
+    approval = approvals.request("INC-2026-0042", "RB-PAY-GATEWAY-01-S2")
+    capability = _grant(approvals, approval.approval_id)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        headers = {
+            "Content-Type": "application/json",
+            "X-Correlation-ID": "44444444-4444-4444-8444-444444444444",
+        }
+        if request.url.path.endswith("/runbook"):
+            return httpx.Response(200, content=json.dumps(RUNBOOK).encode(), headers=headers)
+        return httpx.Response(
+            409,
+            content=json.dumps(
+                {
+                    "detail": {
+                        "code": "incident_action_already_applied",
+                        "existing_record_id": "ACT-direct-existing",
+                    }
+                }
+            ).encode(),
+            headers=headers,
+        )
+
+    client = EnterpriseApiClient(
+        base_url="http://enterprise-api:8080",
+        token="lab-write-token",
+        transport=httpx.MockTransport(handler),
+    )
+    result = apply_incident_action(
+        client,
+        "INC-2026-0042",
+        "RB-PAY-GATEWAY-01-S2",
+        approval_capability=capability,
+        approvals=approvals,
+        audit=audit,
+    )
+
+    assert result["status"] == "approval_rejected"
+    assert result["reason"] == "action_already_applied"
+    assert result["existing_record_id"] == "ACT-direct-existing"
+    assert "resume" not in result
+    persisted = {item.approval_id: item for item in approvals.all_requests()}
+    assert persisted[approval.approval_id].status == "applied"
+    assert persisted[approval.approval_id].applied_record_id == "ACT-direct-existing"
+
+
+def test_upstream_key_binding_conflict_is_not_marked_resumable(tmp_path: Path) -> None:
+    approvals, audit = _stores(tmp_path)
+    approval = approvals.request("INC-2026-0042", "RB-PAY-GATEWAY-01-S2")
+    capability = _grant(approvals, approval.approval_id)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        headers = {
+            "Content-Type": "application/json",
+            "X-Correlation-ID": "44444444-4444-4444-8444-444444444444",
+        }
+        if request.url.path.endswith("/runbook"):
+            return httpx.Response(200, content=json.dumps(RUNBOOK).encode(), headers=headers)
+        return httpx.Response(
+            409,
+            content=json.dumps(
+                {
+                    "detail": {
+                        "code": "idempotency_key_binding_conflict",
+                        "existing_record_id": "ACT-other-action",
+                    }
+                }
+            ).encode(),
+            headers=headers,
+        )
+
+    result = apply_incident_action(
+        EnterpriseApiClient(
+            base_url="http://enterprise-api:8080",
+            token="lab-write-token",
+            transport=httpx.MockTransport(handler),
+        ),
+        "INC-2026-0042",
+        "RB-PAY-GATEWAY-01-S2",
+        approval_capability=capability,
+        approvals=approvals,
+        audit=audit,
+    )
+
+    assert result["status"] == "error"
+    assert result["error"]["code"] == "conflict"
+    assert result["resumable"] is False
+    assert "resume" not in result
+    persisted = {item.approval_id: item for item in approvals.all_requests()}
+    assert persisted[approval.approval_id].status == "approved"
 
 
 def test_pending_request_cannot_be_used_as_a_capability(

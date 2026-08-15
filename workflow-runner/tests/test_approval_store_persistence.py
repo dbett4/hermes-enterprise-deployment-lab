@@ -146,6 +146,18 @@ def test_approval_survives_new_store_instance(tmp_path: Path) -> None:
     assert loaded.status == "pending"
 
 
+def test_same_incident_action_reuses_action_scoped_idempotency_key(tmp_path: Path) -> None:
+    store = ApprovalStore(path=tmp_path / "approvals.json")
+
+    first = store.request("INC-2026-0042", "RB-PAY-GATEWAY-01-S2")
+    second = store.request("INC-2026-0042", "RB-PAY-GATEWAY-01-S2")
+    different_action = store.request("INC-2026-0042", "RB-PAY-GATEWAY-01-S1")
+
+    assert first.approval_id != second.approval_id
+    assert first.idempotency_key == second.idempotency_key
+    assert first.idempotency_key != different_action.idempotency_key
+
+
 def test_multiprocess_requests_retain_every_approval_id(tmp_path: Path) -> None:
     """Independent request() workers must all land in the durable store."""
     path = tmp_path / "approvals.json"

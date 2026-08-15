@@ -2,8 +2,9 @@
 
 This is the only thing in the lab that can be "duplicated" by a retry, so it is
 the object every idempotency proof asserts against. Records are append-only:
-`commit` never mutates an existing record, and a repeated idempotency key
-returns the original record with `created=False`.
+`commit` never mutates an existing record, a repeated idempotency key bound to
+the same incident/action returns the original record with `created=False`, and
+a different key cannot create a second record for that incident/action pair.
 
 Optional file-backed persistence (`ACTION_STORE_PATH` / path=) lets records
 survive process and container restarts. With no path the store stays in memory.
@@ -37,6 +38,22 @@ _REQUIRED_ACTION_STRING_FIELDS = frozenset(
         "applied_at",
     }
 )
+
+
+class ActionConflictError(Exception):
+    code = "action_conflict"
+
+    def __init__(self, existing_record: dict[str, Any]) -> None:
+        super().__init__(self.code)
+        self.existing_record = existing_record
+
+
+class IncidentActionAlreadyAppliedError(ActionConflictError):
+    code = "incident_action_already_applied"
+
+
+class IdempotencyKeyBindingConflictError(ActionConflictError):
+    code = "idempotency_key_binding_conflict"
 
 
 def _utc_now() -> str:
@@ -85,6 +102,7 @@ class ActionStore:
         self._lock = threading.Lock()
         self._records: list[dict[str, Any]] = []
         self._by_key: dict[str, dict[str, Any]] = {}
+        self._by_pair: dict[tuple[str, str], dict[str, Any]] = {}
         self._path: Path | None = Path(path) if path else None
         if self._path is not None:
             with self._lock:
@@ -118,6 +136,7 @@ class ActionStore:
         if not self._path.exists():
             self._records = []
             self._by_key = {}
+            self._by_pair = {}
             return
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
@@ -135,6 +154,7 @@ class ActionStore:
                 f"ACTION_STORE persistence file has invalid records list: {self._path}"
             )
         by_key: dict[str, dict[str, Any]] = {}
+        by_pair: dict[tuple[str, str], dict[str, Any]] = {}
         normalized: list[dict[str, Any]] = []
         for raw_item in records:
             item = _validate_action_record(raw_item, path=self._path)
@@ -143,10 +163,18 @@ class ActionStore:
                 raise ValueError(
                     f"ACTION_STORE persistence file has duplicate idempotency key: {self._path}"
                 )
+            pair = (item["incident_id"], item["action_id"])
+            if pair in by_pair:
+                raise ValueError(
+                    "ACTION_STORE persistence file has duplicate incident/action pair: "
+                    f"{self._path}"
+                )
             by_key[key] = item
+            by_pair[pair] = item
             normalized.append(item)
         self._records = normalized
         self._by_key = by_key
+        self._by_pair = by_pair
 
     def _persist_records_unlocked(self, records: list[dict[str, Any]]) -> None:
         if self._path is None:
@@ -176,7 +204,15 @@ class ActionStore:
                 self._reload_if_file_backed_unlocked()
                 existing = self._by_key.get(idempotency_key)
                 if existing is not None:
+                    if (
+                        existing["incident_id"] != incident_id
+                        or existing["action_id"] != action_id
+                    ):
+                        raise IdempotencyKeyBindingConflictError(existing)
                     return existing, False
+                existing_pair = self._by_pair.get((incident_id, action_id))
+                if existing_pair is not None:
+                    raise IncidentActionAlreadyAppliedError(existing_pair)
 
                 record: dict[str, Any] = {
                     "record_id": f"ACT-{uuid.uuid4().hex[:12]}",
@@ -196,6 +232,7 @@ class ActionStore:
                 self._persist_records_unlocked(prospective_records)
                 self._records = prospective_records
                 self._by_key[idempotency_key] = record
+                self._by_pair[(incident_id, action_id)] = record
                 return record, True
 
     def get_by_key(self, idempotency_key: str) -> dict[str, Any] | None:
@@ -227,6 +264,7 @@ class ActionStore:
                 self._persist_records_unlocked([])
                 self._records = []
                 self._by_key = {}
+                self._by_pair = {}
                 return count
 
 

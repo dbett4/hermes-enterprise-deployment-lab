@@ -62,6 +62,24 @@ class EnterpriseApiClient:
                 self.correlation_id,
                 call,
             )
+        if response.status_code == 409:
+            bounded_details: dict[str, str] = {}
+            try:
+                raw_detail = response.json().get("detail")
+            except (ValueError, AttributeError):
+                raw_detail = None
+            if isinstance(raw_detail, dict):
+                for key in ("code", "existing_record_id"):
+                    value = raw_detail.get(key)
+                    if isinstance(value, str) and value:
+                        bounded_details[key] = value[:128]
+            return WorkflowError(
+                WorkflowErrorCode.CONFLICT,
+                "Upstream rejected the mutation because it conflicts with existing state",
+                self.correlation_id,
+                call,
+                details=bounded_details,
+            )
         if response.status_code >= 500:
             return WorkflowError(
                 WorkflowErrorCode.UPSTREAM_5XX,
