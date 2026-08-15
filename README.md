@@ -1,62 +1,110 @@
 # Hermes Enterprise Deployment Lab
 
-> **Provenance.** Sanitized public extract published August 2026. Public git history
-> is publication history, not the original private development timeline. Incident
-> `INC-2026-0042`, operators, and API data are fictional fixtures. No client data or
-> credentials appear in this repository. Private client history remains confidential;
-> public claims are limited to inspectable artifacts.
+`./scripts/demo.sh` boots a local enterprise API and walks one runbook action all
+the way through the failure that actually hurts: the API commits the write, then
+returns 500. Ten steps, no containers, no API keys, no model. What follows is what
+the code does, step by step, with the file and test that establishes each claim.
 
-## The problem this answers
+## The arc the demo runs
 
-When an AI agent can touch an internal system, the hard failures are not “the model
-said something wrong.” They are operational:
+Everything below is `enterprise-mcp/enterprise_mcp/demo.py`, which `scripts/demo.sh`
+executes and `enterprise-mcp/tests/test_demo_arc.py` runs as a test, so the demo
+cannot rot into a story the code no longer tells. Every tool call crosses a real MCP
+stdio boundary into a freshly spawned `enterprise_mcp.server` process. The caller is
+the script; no model has ever driven this arc.
 
-1. **Too many tools** — the agent sees write paths it should not have.
-2. **Self-approval** — the same path that proposes a change also grants it.
-3. **Lies after success** — the API already committed, then returns an error; a naive
-   retry double-writes.
-4. **No receipt** — nobody can reconstruct who approved what, or whether resume was safe.
+**1–2. The tool surface is decided by the server.** With the read/plan allowlist,
+`list_tools` returns three tools and `apply_incident_plan` is not among them —
+`build_server` in `enterprise-mcp/enterprise_mcp/server.py` never registers a tool
+outside the allowlist, so an excluded tool is not merely refused, it does not exist on
+the wire. Calling it raises. Switch the allowlist to `all` and four tools appear.
+Proof: `enterprise-mcp/tests/test_tool_filtering.py`, and differentially against the
+real Hermes CLI in `scripts/hermes-tool-filter-proof.sh` (4 tools vs 1).
 
-This lab is a **synthetic, runnable answer** to those failures. It is engineering
-evidence, not a customer Hermes Enterprise deployment, not production identity
-integration, and not a model-driven production run.
+**3–4. The first write stops itself.** `propose_incident_plan` returns runbook steps
+with stable `action_id`s and `approval_required` flags. Calling `apply_incident_plan`
+without a capability returns `status: pending_approval` and an opaque `approval_id` —
+no capability, no idempotency key, and no HTTP write is issued at all. The demo counts
+the action store before and after to show the count did not move. Proof:
+`workflow-runner/tests/test_executor.py::test_missing_approval_issues_only_an_id_and_writes_nothing`,
+asserted against observed HTTP traffic, and
+`enterprise-mcp/tests/test_approval_and_resume_over_mcp.py::test_unapproved_call_makes_no_side_effect`
+over the real stdio boundary.
 
-**One-line pitch:** scope the tools, separate the human operator from the agent,
-survive the ugly post-commit failure, and leave exactly one side effect.
+**5. Approval comes from a different command.** `python -m
+workflow_runner.approval_operator approve <approval_id> --approver <identity>` is a
+separate process the MCP server cannot invoke on its own. It records the approver,
+returns an expiring capability exactly once, and persists only its SHA-256 hash.
+Proof: `workflow-runner/tests/test_executor.py::test_operator_identity_is_recorded_and_plaintext_capability_is_not`;
+rationale in [ADR 005](docs/adr/005-separated-operator-approval.md). Forged, expired,
+wrongly bound, and already-applied capabilities are each refused before dispatch
+(`test_forged_capability_writes_nothing`, `test_expired_capability_is_terminal_and_writes_nothing`,
+`test_capability_bound_to_a_different_incident_is_refused`, `test_pending_request_cannot_be_used_as_a_capability`).
 
-## What it is (and is not)
+**6. The ambiguous failure, on purpose.** With
+`ENTERPRISE_INJECT_FAILURE=error_after_commit`, `enterprise-api/app/main.py` writes the
+record and *then* returns 500. The caller sees `upstream_5xx` plus resume instructions
+and cannot tell from the response whether the write landed. It did.
 
-| It is | It is not |
-|---|---|
-| A local deployment lab with a mock enterprise API | A customer or cloud production deploy |
-| Scoped MCP tools + a separate operator approval path | The agent approving its own writes |
-| Forced failure after commit + safe resume | Proof that every real outage is handled |
-| Credential-free tests and public CI receipts | Model-driven tool calls (scripts/tests call tools) |
-| Optional container / telemetry / trace proofs | Kubernetes, OIDC, or operated multi-tenant infra |
+**7–8. Resume replays instead of re-applying.** The executor re-derives the
+incident/action pair's idempotency key at dispatch — it does not trust the key stored
+on the approval — so the resumed call returns the original record with
+`replayed: true`. The store holds exactly one record, and a third use of the same
+capability is refused with `approval_already_applied` without dispatching anything.
+Proof: `enterprise-mcp/tests/test_approval_and_resume_over_mcp.py::test_forced_failure_then_resume_leaves_one_side_effect`,
+plus `workflow-runner/tests/test_executor.py::test_two_distinct_approvals_for_same_action_create_only_one_record`
+and `test_concurrent_distinct_approvals_converge_on_one_side_effect`. The API's action
+store enforces the same one-record-per-pair invariant independently, returning HTTP 409
+to a direct write-token caller who supplies a different key
+(`enterprise-api/tests/test_actions.py`).
 
-## The story in one pass
+**9–10. Scope and trail.** A write attempted with only the read credential is refused by
+the API with `auth_failure` and produces no record. The run's `.jsonl` audit log holds
+request, named operator grant, capability acceptance, failure, and replay events
+(`workflow-runner/tests/test_audit.py`). The log is not tamper-evident; see
+[Limits](#limits).
 
-```text
-Agent (or script) sees only the allowed tools
-        ↓
-It can read and plan
-        ↓
-First write stops: pending approval, no mutation yet
-        ↓
-A separate operator command grants a one-time capability
-        ↓
-API commits — then we inject a 500 (the awkward case)
-        ↓
-Resume reuses the same idempotency key
-        ↓
-Exactly one record exists; the capability cannot be reused
-```
+The whole arc runs from a clean clone in `./scripts/fresh-clone-check.sh`, and against
+the containerized API in the Docker-backed CI `container-proof` job — public CI run
+[`31891411678`](https://github.com/dbett4/hermes-enterprise-deployment-lab/actions/runs/31891411678)
+at `3da5938`.
 
-Run the arc:
+> **Provenance.** This repository has real pre-publication history: the first 11
+> commits (`git log --reverse --date=iso`, 2026-07-27 through 2026-08-01) predate
+> publication; nothing was squashed into a publication commit. Incident `INC-2026-0042`,
+> its runbook, the operator identities, and the API data are **fictional fixtures**
+> (`enterprise-api/app/fixtures.py`); no client data or credentials appear here, and
+> private client history stays private.
 
-```bash
-./scripts/demo.sh
-```
+## What is in here
+
+| Capability | Where | State |
+|---|---|---|
+| Scoped MCP tool surface over stdio | `enterprise-mcp/enterprise_mcp/server.py` | Server-side allowlist; verified differentially against the real Hermes CLI |
+| Separated operator approval, expiry, terminal capabilities | `workflow-runner/workflow_runner/approvals.py`, `approval_operator.py` | Working; identity is supplied, not authenticated |
+| Idempotent execution and post-commit resume | `workflow-runner/workflow_runner/executor.py`, `enterprise-api/app/store.py` | Working; one record per incident/action pair, enforced on both sides |
+| Mock enterprise API with deterministic fault injection | `enterprise-api/app/` | Working; in-memory by default, optional JSON file for restart proofs |
+| **LangGraph agent workflow** — retrieval → analysis → safety review, fail-closed, with a citation/provenance/safety evaluator | `agent_workflow/graph.py`, `retrieval.py`, `evaluation.py` | Stage-1, read-only: it plans and evaluates, it never executes an action. `pytest tests/test_agent_workflow.py`, `scripts/agent-workflow-proof.py` |
+| Audit trail | `workflow-runner/workflow_runner/audit.py` | Append-only `.jsonl`; no signature or chain hash |
+| Metrics, alert rules, SLO math | `enterprise-api/app/metrics.py`, `observability/`, `docs/slo.md` | Native localhost proof; no Alertmanager or pager |
+| OpenTelemetry tracing | `enterprise-api/app/tracing.py`, `workflow-runner/workflow_runner/tracing.py` | Opt-in, loopback OTLP capture only |
+| Cloud/hybrid IaC reference | `docs/cloud-hybrid-reference.md`, `scripts/cloud-iac-proof.sh` | Validate-only OpenTofu plans; never deployed |
+
+The LangGraph pipeline is deliberately the read-only half: it retrieves tenant-scoped
+runbook context with citations, fails closed without tenant scope or supporting
+evidence, and routes through explicit analysis and safety-review stages. Its retrieval
+is exact keyword-token overlap over an in-script fixture — not semantic relevance — and
+its evaluator is a regression check, not a mutation gate. The mutation gate is the
+approval machinery above.
+
+## Two repositories, one family
+
+This lab is the execution half. The governance half — policy packs, approved
+configurations, independent checks, and human review gates — is the
+[Hermes Enterprise Evaluation Kit](https://github.com/dbett4/hermes-enterprise-evaluation-kit),
+whose S3 **Act** mission runs against this lab's MCP tools. The split, and the exact
+code path that connects them, is in
+[`docs/hermes-enterprise-family.md`](docs/hermes-enterprise-family.md).
 
 ## Try the proof path
 
@@ -79,34 +127,14 @@ Treat a green Docker-backed `container-proof` job plus its uploaded receipt as t
 authority for the container path. Cloud IaC jobs here are **validate only** (no
 refresh/apply) and are never deployment evidence.
 
-## Design choices that matter
-
-1. **Tool surface is decided by the server**, not hoped for in the prompt.
-2. **Approval is a different command path** from the MCP server ([ADR 005](docs/adr/005-separated-operator-approval.md)).
-3. **Plaintext capability is returned once**; only a hash is stored.
-4. **Post-commit failure is a first-class demo**, not an afterthought.
-5. **Resume is idempotent** — replay, do not re-apply.
-6. **Hermes is an external client** for discovery proofs; scripts and tests perform
-   the tool calls. I declined model-spend for invocation on 2026-08-01, so this repo
-   does not claim model-driven runs.
-
-## Sister project
-
-If this lab answers **“when an agent can touch a system, can we approve and recover
-safely?”**, the related kit answers a different question:
-
-**[Hermes Enterprise Evaluation Kit](https://github.com/dbett4/hermes-enterprise-field-kit)** —
-can we govern Hermes for enterprise-shaped work with policy packs, independent
-checks, and human review gates?
-
-Same family. Different question.
+Hermes itself is an external client, not a Compose service: `hermes mcp test` lists the
+tools under an isolated `HERMES_HOME` and never touches `~/.hermes/config.yaml`. It
+discovers; `scripts/*.sh` and `pytest` call. Model-driven invocation would need
+provider spend, which I declined on 2026-08-01 — this repository will not claim it.
 
 ## What you can check
 
-You can rerun each result below. Prefer the plain-language claim; the command is the
-receipt.
-
-You can rerun each result below:
+Each row is a rerunnable command. The command is the receipt.
 
 | Claim | Established by |
 |---|---|
@@ -198,7 +226,7 @@ the tools; `scripts/*.sh` and `pytest` call them.
   There is no vector store, model call, action execution, authorization, or
   external validation. The evaluator is a regression check, not a mutation gate.
 
-## How it works
+## Component map
 
 ```
 Hermes / script ──stdio──► enterprise-mcp ──Bearer+Idempotency-Key──► enterprise-api
@@ -213,21 +241,8 @@ Prometheus ──scrape /metrics──► enterprise-api
 OTLP capture (opt-in, loopback) ◄── workflow-runner CLIENT + enterprise-api SERVER
 ```
 
-1. **Choose the surface.** The default allowlist exposes read/plan tools only.
-2. **Read and plan.** `propose_incident_plan` returns runbook steps with stable
-   `action_id`s and `approval_required` flags.
-3. **Stop the first write.** `apply_incident_plan` without a capability writes
-   nothing and returns only `pending_approval` plus an opaque `approval_id`.
-4. **Get an operator grant.** `python -m workflow_runner.approval_operator approve
-   <approval_id> --approver <identity>` records the approver and returns the
-   expiring capability once; only its hash is persisted.
-5. **Force the awkward failure.** With `ENTERPRISE_INJECT_FAILURE=error_after_commit`, the
-   API commits the record and *then* returns 500. The caller sees `upstream_5xx`
-   and resume instructions.
-6. **Resume.** The same capability reuses the idempotency key; the API
-   returns the original record with `replayed: true`.
-7. **Check the result.** The store holds one record and another use of
-   the applied capability is rejected without dispatch.
+The step-by-step behaviour behind this diagram is the walkthrough at the top of this
+file; the security model is in [`docs/architecture.md`](docs/architecture.md).
 
 ## Fresh-clone setup
 
@@ -353,6 +368,7 @@ ENTERPRISE_API_WRITE_TOKEN=lab-write-token
 | [`docs/second-operator-protocol.md`](docs/second-operator-protocol.md) | The validation checklist and current human/AI-agent gate status |
 | [`docs/independent-ai-validation-2026-08-15.md`](docs/independent-ai-validation-2026-08-15.md) | Independent AI-agent clean-checkout receipt at `3da5938`; same VPS, not human, container skipped |
 | [`docs/build-spec.md`](docs/build-spec.md) | Original target and shipped status |
+| [`docs/hermes-enterprise-family.md`](docs/hermes-enterprise-family.md) | How this lab and the Evaluation Kit divide the problem, and the code path that joins them |
 
 ## Build status
 
