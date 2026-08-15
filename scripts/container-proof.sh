@@ -348,7 +348,7 @@ CREATED_HTTP="$(
     -H "Authorization: Bearer ${WRITE_TOKEN}" \
     -H "Idempotency-Key: ${IDEM_KEY}-telemetry-created" \
     -H "Content-Type: application/json" \
-    -d '{"action_id":"RB-PAY-GATEWAY-01-S2","note":"container-proof telemetry create"}'
+    -d '{"action_id":"RB-PAY-GATEWAY-01-S3","note":"container-proof telemetry create"}'
 )"
 test "$CREATED_HTTP" = "201"
 CREATED_METRIC="$(
