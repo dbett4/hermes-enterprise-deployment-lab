@@ -144,8 +144,8 @@ Each row is a rerunnable command. The command is the receipt.
 | A mutation request returns only an opaque `approval_id`; it leaks neither the capability nor idempotency key and sends no write request | `pytest workflow-runner/tests/test_executor.py` (asserted against observed HTTP traffic) |
 | Only the separate operator path can approve; approver identity is recorded and the plaintext capability is not stored | same file, `test_operator_identity_is_recorded_and_plaintext_capability_is_not` |
 | A forged, expired, already-applied, or wrongly bound capability is refused before dispatch | workflow-runner unit tests + MCP end-to-end tests |
-| A fault injected **after commit** is survivable: the resume replays instead of re-applying | same file, `test_forced_failure_then_resume_leaves_one_side_effect` |
-| Exactly one side effect exists after failure + resume, then the capability becomes terminal | same test, and `./scripts/demo.sh` STEP 8 |
+| A fault injected **after commit** is survivable: the resume replays instead of re-applying | `pytest enterprise-mcp/tests/test_approval_and_resume_over_mcp.py::test_forced_failure_then_resume_leaves_one_side_effect` (over real MCP stdio), and `workflow-runner/tests/test_executor.py::test_approved_call_writes_once_and_replays_thereafter` |
+| Exactly one side effect exists after failure + resume, then the capability becomes terminal | same tests, and `./scripts/demo.sh` STEP 8 |
 | A read-only credential cannot mutate | `pytest enterprise-api/tests/test_actions.py` + demo STEP 9 |
 | Credentials really reach the MCP subprocess — a wrong token actually fails | `pytest enterprise-mcp/tests/test_stdio_credential_injection.py` |
 | The server fails closed with no token instead of falling back to a default | same file, `test_server_fails_closed_without_a_token` |
