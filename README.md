@@ -165,9 +165,12 @@ the tools; `scripts/*.sh` and `pytest` call them.
 - The server's allowlist is tested. Hermes's own `tools.include` behavior is
   not. On 2026-08-01, narrowing that list still made `hermes mcp test` print all
   three server-advertised tools.
-- No second operator has run the validation steps. The blank
-  [second-operator protocol](docs/second-operator-protocol.md) is a checklist,
-  not a result, and nobody is scheduled to run it.
+- An [independent AI-agent clean-checkout validation](docs/independent-ai-validation-2026-08-15.md)
+  passed every executable native, demo, Hermes discovery, differential-filter,
+  and adversarial path at `3da5938`. It ran on the same VPS, not a different
+  physical machine, and its container step was skipped because the validator
+  could not access a Docker/Podman daemon. It is not human second-operator
+  validation; the public Docker-capable CI result remains separate evidence.
 - The approval guard lives in the workflow runner. A client with the write token
   can bypass it and call the fixture API directly, with no audit entry.
 - This is not a production deployment: no OIDC, Kubernetes, real identity
@@ -347,7 +350,8 @@ ENTERPRISE_API_WRITE_TOKEN=lab-write-token
 | [`docs/adr/003-stdio-mcp-read-plan-tools.md`](docs/adr/003-stdio-mcp-read-plan-tools.md) | Why stdio MCP |
 | [`docs/adr/004-enforced-approval-idempotency-and-scoped-tools.md`](docs/adr/004-enforced-approval-idempotency-and-scoped-tools.md) | Historical two-call guard and credential/scoping decision |
 | [`docs/adr/005-separated-operator-approval.md`](docs/adr/005-separated-operator-approval.md) | Superseding separated approval state machine and resume semantics |
-| [`docs/second-operator-protocol.md`](docs/second-operator-protocol.md) | A validation checklist that has not been run |
+| [`docs/second-operator-protocol.md`](docs/second-operator-protocol.md) | The validation checklist and current human/AI-agent gate status |
+| [`docs/independent-ai-validation-2026-08-15.md`](docs/independent-ai-validation-2026-08-15.md) | Independent AI-agent clean-checkout receipt at `3da5938`; same VPS, not human, container skipped |
 | [`docs/build-spec.md`](docs/build-spec.md) | Original target and shipped status |
 
 ## Build status
@@ -371,7 +375,7 @@ These boundaries remain open or deliberately out of scope.
 |---|---|---|
 | Production approval identity/policy integration | Not implemented | The operator command records a supplied identity but does not authenticate it. |
 | Model-driven tool invocation | **Declined, 2026-08-01** | Provider spend declined. Permanent; this repository will never demonstrate it. |
-| Second-operator validation | **Unrun** | `docs/second-operator-protocol.md` is a script nobody has executed. |
+| Second-operator validation | **AI-agent clean-checkout PASS_WITH_LIMITATIONS; human/different-machine unrun** | The [published receipt](docs/independent-ai-validation-2026-08-15.md) records 240 tests plus demo, native telemetry/trace, Hermes discovery/filter, and adversarial passes. Validator-local container execution was skipped; exact-commit public CI supplies separate Docker evidence. |
 | CI container-proof run | **Per-commit evidence gate** | Treat the container path as attested only when the exact commit's Docker-capable Actions job is green and its uploaded receipt reports a pass. |
 | CI cloud-IaC proof run | **Per-commit validation gate** | The read-only job validates no-refresh/no-apply plans; its status is visible in Actions and cannot prove deployment or runtime behavior. |
 | Action-level deduplication | CI-attested at `3da5938` | Workflow approvals share a deterministic pair key, and the locked enterprise action store rejects a different-key duplicate pair with HTTP 409. Single-host fixture invariant only. |

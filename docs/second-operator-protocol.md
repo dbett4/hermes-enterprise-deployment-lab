@@ -1,10 +1,13 @@
 # Second-operator checklist
 
-**Status: not run. No validator is assigned or scheduled.**
+**Status: independent AI-agent clean-checkout run published; human
+second-operator and different-machine validation remain unrun.**
 
-This is the checklist I would give an independent reviewer. It is not a
-validation result. The results table stays blank until someone other than the
-author runs every step on a different machine and records what happened.
+This remains the checklist for a human independent reviewer. On 2026-08-15 an
+independent AI-agent lane executed it from a brand-new checkout on the same VPS.
+That result is published separately as
+[`independent-ai-validation-2026-08-15.md`](independent-ai-validation-2026-08-15.md).
+It is not human validation and did not satisfy the different-machine gate.
 
 The goal is to see whether the claims in `README.md` hold from a clean clone,
 without help from the author.
@@ -148,24 +151,30 @@ Record anything that succeeded when it should not have.
 
 ## Results
 
-Not run. No validator has been identified or scheduled.
+An independent AI-agent clean-checkout run is recorded in
+[`independent-ai-validation-2026-08-15.md`](independent-ai-validation-2026-08-15.md).
+The results below summarize that bounded run; they do not represent a human or
+different-machine review.
 
 | Field | Value |
 |---|---|
-| Validator name | |
-| Date (UTC) | |
-| Commit SHA validated | |
-| Environment (from the table above) | |
-| Step 3 pytest summary line | |
-| Step 4 demo result (pass/fail) | |
-| Step 5 native telemetry result (pass/fail) | |
-| Step 5 native trace result (pass/fail) | |
-| Step 6 container result (pass/fail/skipped) | |
-| Step 7 Hermes result (pass/fail/skipped) | |
-| Step 8 findings | |
-| Claims that did NOT hold | |
-| Overall verdict | |
+| Validator name | Independent Hermes AI-agent lane using Gemini 3.7 Flash; not a human |
+| Date (UTC) | 2026-08-15 |
+| Commit SHA validated | `3da59385bcea7a0082b4f9280a5bcb22e6bd2196` |
+| Environment (from the table above) | Ubuntu 24.04.4 LTS, x86_64, Python 3.12.3, Hermes v0.20.0; same VPS in a brand-new checkout |
+| Step 3 pytest summary line | `240 passed, 2 warnings in 28.79s` |
+| Step 4 demo result (pass/fail) | PASS |
+| Step 5 native telemetry result (pass/fail) | PASS |
+| Step 5 native trace result (pass/fail) | PASS |
+| Step 6 container result (pass/fail/skipped) | SKIPPED — Docker CLI present but daemon denied; no Podman |
+| Step 7 Hermes result (pass/fail/skipped) | PASS — default discovery 3 tools; differential surface 4 tools vs 1 |
+| Step 8 findings | Selected tests for every listed attack class passed; no forbidden mutation succeeded |
+| Claims that did NOT hold | None observed among executable paths; container path was not executed in the validator lane |
+| Overall verdict | **PASS_WITH_LIMITATIONS** |
 
 ### Validator notes
 
-_(free text — including anything confusing, under-documented, or wrong)_
+The AI-agent receipt is separate from the exact-commit public CI receipt. The
+former independently exercised native paths but lacked a container daemon; the
+latter exercised Docker but is not a human second-operator run. A human on a
+different machine remains the open gate.

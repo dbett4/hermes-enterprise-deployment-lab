@@ -11,6 +11,7 @@ PROOF = ROOT / "PROOF.md"
 RUNBOOK = ROOT / "docs" / "runbook.md"
 ARCHITECTURE = ROOT / "docs" / "architecture.md"
 SECOND_OPERATOR = ROOT / "docs" / "second-operator-protocol.md"
+INDEPENDENT_VALIDATION = ROOT / "docs" / "independent-ai-validation-2026-08-15.md"
 COMPOSE = ROOT / "compose.yaml"
 API_MAIN = ROOT / "enterprise-api" / "app" / "main.py"
 
@@ -181,3 +182,18 @@ def test_langgraph_stage1_public_ci_claim_stays_bounded() -> None:
 
     assert "Local-only until a green public CI run on the adopting commit" not in proof
     assert "predates the provenance hardening" not in proof
+
+
+def test_independent_validation_receipt_preserves_human_and_container_boundaries() -> None:
+    """The clean-checkout receipt must not silently become human or container evidence."""
+    readme = README.read_text(encoding="utf-8")
+    protocol = SECOND_OPERATOR.read_text(encoding="utf-8")
+    receipt = INDEPENDENT_VALIDATION.read_text(encoding="utf-8")
+
+    assert "PASS_WITH_LIMITATIONS" in receipt
+    assert "not a human" in receipt
+    assert "same VPS" in receipt
+    assert "Container proof | SKIPPED" in receipt
+    assert "human/different-machine unrun" in readme
+    assert "different-machine validation remain unrun" in protocol
+    assert "31891411678" in receipt
