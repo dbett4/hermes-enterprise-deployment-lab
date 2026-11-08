@@ -192,3 +192,39 @@ jobs:
           PYTHONPATH=. .venv/bin/python scripts/agent-workflow-proof.py
           cp .env.example .env
           ./scripts/demo.sh
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned gitleaks
+        run: |
+          set -euo pipefail
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL --retry 3 -o "/tmp/${tarball}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          echo "${GITLEAKS_SHA256}  /tmp/${tarball}" | sha256sum -c -
+          tar -xzf "/tmp/${tarball}" -C /tmp gitleaks
+          /tmp/gitleaks version
+
+      - name: Scan pushed or proposed commits for secrets
+        # Default rules plus the fixture allowlist in .gitleaks.toml.
+        # Scans only the commits this push/PR adds; a new branch scans all history.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA}" ] && ! [[ "${BASE_SHA}" =~ ^0+$ ]] && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            range="${BASE_SHA}..${HEAD_SHA}"
+          else
+            range="${HEAD_SHA}"
+          fi
+          echo "gitleaks range: ${range}"
+          /tmp/gitleaks git --redact --no-banner --config .gitleaks.toml --log-opts="${range}" .
