@@ -1,0 +1,18 @@
+# Secret scan configuration for the `secret-scan` CI job.
+# Extends the gitleaks default rules; each allowlist is scoped to one rule and
+# one known non-secret so that any real credential still fails the scan.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documented lab fixture bearer tokens (see SECURITY.md)"
+targetRules = ["curl-auth-header"]
+regexes = ['''^(lab-read-token|lab-write-token|invalid-container-proof-token)$''']
+
+[[allowlists]]
+description = "Shell variable name misread as an API key in the telemetry proof"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^scripts/telemetry-proof\.sh$''']
+regexes = ['''^PROMETHEUS_PID=?$''']
